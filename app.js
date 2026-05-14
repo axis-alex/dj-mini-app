@@ -1,0 +1,663 @@
+(function(){
+'use strict';
+const TG=window.Telegram?.WebApp; if(TG) TG.ready();
+const playerA=new Tone.Player(),playerB=new Tone.Player();
+const eqA=new Tone.EQ3(0,0,0),eqB=new Tone.EQ3(0,0,0);
+const gainA=new Tone.Gain(1),gainB=new Tone.Gain(1);
+const masterGain=new Tone.Gain(0.8),crossFade=new Tone.CrossFade(0.5);
+const fxA={delay:new Tone.FeedbackDelay('8n',0.4).set({wet:0}),reverb:new Tone.Reverb(1.5).set({wet:0}),phaser:new Tone.Phaser({frequency:2,octaves:3,baseFrequency:1000}).set({wet:0})};
+const fxB={delay:new Tone.FeedbackDelay('8n',0.4).set({wet:0}),reverb:new Tone.Reverb(1.5).set({wet:0}),phaser:new Tone.Phaser({frequency:2,octaves:3,baseFrequency:1000}).set({wet:0})};
+playerA.chain(eqA,fxA.delay,fxA.reverb,fxA.phaser,gainA,crossFade.a);
+playerB.chain(eqB,fxB.delay,fxB.reverb,fxB.phaser,gainB,crossFade.b);
+const dest=Tone.context.createMediaStreamDestination();
+crossFade.chain(masterGain,Tone.Destination); masterGain.connect(dest);
+
+const deck={
+  A:{playing:false,fileUrl:null,startTime:0,offset:0,bpm:0,firstBeat:0,pitch:1,loopIn:-1,loopOut:-1,loopActive:false,bars:null},
+  B:{playing:false,fileUrl:null,startTime:0,offset:0,bpm:0,firstBeat:0,pitch:1,loopIn:-1,loopOut:-1,loopActive:false,bars:null}
+};
+const players={A:playerA,B:playerB};
+let isRecording=false,mediaRecorder,audioChunks=[];
+const activeFx={A:{},B:{}};
+const $=id=>document.getElementById(id);
+
+function fmtTime(s){if(!s||!isFinite(s))return'0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}
+function getDur(d){const p=players[d];return p.buffer?.loaded?p.buffer.duration:0;}
+function getPos(d){const s=deck[d];if(!s.playing)return Math.min(s.offset,getDur(d));const el=(Tone.now()-s.startTime)*s.pitch;return Math.min(s.offset+el,getDur(d));}
+
+// === Pre-compute waveform bars (SoundCloud style) ===
+function computeBars(buffer,numBars){
+  if(!buffer||!buffer.loaded)return null;
+  const ch=buffer.getChannelData(0);
+  const len=ch.length;
+  const step=Math.floor(len/numBars);
+  const bars=new Float32Array(numBars);
+  let maxPeak=0;
+  for(let i=0;i<numBars;i++){
+    let peak=0;
+    const start=i*step;
+    for(let j=0;j<step;j++){
+      const v=Math.abs(ch[start+j]||0);
+      if(v>peak)peak=v;
+    }
+    bars[i]=peak;
+    if(peak>maxPeak)maxPeak=peak;
+  }
+  if(maxPeak>0)for(let i=0;i<numBars;i++)bars[i]/=maxPeak;
+  return bars;
+}
+
+// === SoundCloud-style waveform ===
+function drawWaveform(canvas,d,accent){
+  const s=deck[d];
+  const bars=s.bars;
+  const dpr=window.devicePixelRatio||1;
+  const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  const w=cw*dpr,h=ch*dpr;
+  if(canvas.width!==w)canvas.width=w;
+  if(canvas.height!==h)canvas.height=h;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle='#080818';
+  ctx.fillRect(0,0,w,h);
+
+  if(!bars){
+    ctx.fillStyle='#2a2a4a';
+    ctx.font=(11*dpr)+'px Inter,sans-serif';
+    ctx.textAlign='center';
+    ctx.fillText('нет трека',w/2,h/2+4*dpr);
+    return;
+  }
+
+  const numBars=bars.length;
+  const dur=getDur(d);
+  const pos=getPos(d);
+  const progress=dur>0?pos/dur:0;
+  const playX=progress*w;
+
+  // Loop region
+  const loopIn=s.loopIn,loopOut=s.loopOut;
+  const hasLoop=loopIn>=0&&loopOut>loopIn;
+  if(hasLoop){
+    const x1=(loopIn/dur)*w, x2=(loopOut/dur)*w;
+    ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.08)':'rgba(0,230,118,0.04)';
+    ctx.fillRect(x1,0,x2-x1,h);
+    // Loop markers
+    ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.6)':'rgba(0,230,118,0.3)';
+    ctx.fillRect(x1,0,1.5*dpr,h);
+    ctx.fillRect(x2-1.5*dpr,0,1.5*dpr,h);
+  }
+
+  // Bar dimensions
+  const barGap=1*dpr;
+  const totalBarW=w/numBars;
+  const barW=Math.max(1,totalBarW-barGap);
+  const mainH=h*0.65; // main bars take 65% height
+  const refH=h*0.25;  // reflection 25%
+  const midY=mainH;   // divider line
+
+  for(let i=0;i<numBars;i++){
+    const amp=bars[i];
+    const x=i*totalBarW;
+    const bh=Math.max(1*dpr, amp*mainH*0.95);
+    const rh=Math.max(0, amp*refH*0.6);
+    const isPast=x<playX;
+
+    // Main bar (grows upward from midY)
+    if(isPast){
+      ctx.fillStyle=accent;
+      ctx.globalAlpha=0.85;
+    }else{
+      ctx.fillStyle=accent;
+      ctx.globalAlpha=0.25;
+    }
+    // Rounded top
+    const bx=x+barGap/2;
+    const by=midY-bh;
+    const radius=Math.min(barW/2, 2*dpr);
+    ctx.beginPath();
+    ctx.moveTo(bx+radius,by);
+    ctx.lineTo(bx+barW-radius,by);
+    ctx.quadraticCurveTo(bx+barW,by,bx+barW,by+radius);
+    ctx.lineTo(bx+barW,midY);
+    ctx.lineTo(bx,midY);
+    ctx.lineTo(bx,by+radius);
+    ctx.quadraticCurveTo(bx,by,bx+radius,by);
+    ctx.fill();
+
+    // Reflection (grows downward from midY+2)
+    const ry=midY+2*dpr;
+    ctx.globalAlpha*=0.3;
+    ctx.fillRect(bx,ry,barW,rh);
+    ctx.globalAlpha=1;
+  }
+
+  // Playhead
+  if(progress>0.001&&progress<0.999){
+    ctx.save();
+    ctx.shadowColor=accent;
+    ctx.shadowBlur=8*dpr;
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(playX-1*dpr,0,2*dpr,h);
+    ctx.restore();
+    // Small triangle at top
+    ctx.fillStyle='#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(playX-4*dpr,0);
+    ctx.lineTo(playX+4*dpr,0);
+    ctx.lineTo(playX,6*dpr);
+    ctx.fill();
+  }
+
+  // Subtle center divider
+  ctx.strokeStyle='rgba(255,255,255,0.06)';
+  ctx.beginPath();ctx.moveTo(0,midY);ctx.lineTo(w,midY);ctx.stroke();
+}
+
+// === Vinyl ===
+function drawVinyl(canvas,playing,rot,accent){
+  const ctx=canvas.getContext('2d');
+  const w=canvas.width,h=canvas.height,cx=w/2,cy=h/2,r=w/2-4;
+  ctx.clearRect(0,0,w,h);ctx.save();ctx.translate(cx,cy);ctx.rotate(rot);
+  const g=ctx.createRadialGradient(0,0,r*0.15,0,0,r);
+  g.addColorStop(0,'#333');g.addColorStop(0.3,'#111');g.addColorStop(0.5,'#1a1a1a');g.addColorStop(0.7,'#0f0f0f');g.addColorStop(1,'#080808');
+  ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=g;ctx.fill();
+  for(let i=0;i<8;i++){const gr=r*0.35+i*(r*0.065);ctx.beginPath();ctx.arc(0,0,gr,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,0.04)';ctx.lineWidth=0.5;ctx.stroke();}
+  const lg=ctx.createRadialGradient(0,0,0,0,0,r*0.25);lg.addColorStop(0,accent);lg.addColorStop(1,'#111');
+  ctx.beginPath();ctx.arc(0,0,r*0.25,0,Math.PI*2);ctx.fillStyle=lg;ctx.fill();
+  ctx.beginPath();ctx.arc(0,0,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+  ctx.beginPath();ctx.moveTo(r*0.3,0);ctx.lineTo(r*0.85,0);ctx.strokeStyle=playing?accent:'rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.stroke();
+  ctx.restore();
+  if(playing){ctx.beginPath();ctx.arc(cx,cy,r+2,0,Math.PI*2);ctx.strokeStyle=accent;ctx.lineWidth=1.5;ctx.globalAlpha=0.3+Math.sin(Date.now()/300)*0.15;ctx.stroke();ctx.globalAlpha=1;}
+}
+
+// === BPM Detection (onset energy flux + autocorrelation) ===
+function detectBPM(buffer) {
+  if (!buffer?.loaded) return { bpm: 0, firstBeat: 0 };
+  const raw = buffer.getChannelData(0);
+  const sr = buffer.sampleRate;
+
+  // 1. Compute energy in ~10ms frames (low-pass focus for kick detection)
+  const frameSize = Math.floor(sr * 0.01); // 10ms
+  const hopSize = Math.floor(frameSize / 2);
+  const numFrames = Math.floor((raw.length - frameSize) / hopSize);
+  const energy = new Float32Array(numFrames);
+
+  for (let i = 0; i < numFrames; i++) {
+    let sum = 0;
+    const offset = i * hopSize;
+    for (let j = 0; j < frameSize; j++) {
+      const v = raw[offset + j];
+      sum += v * v;
+    }
+    energy[i] = sum / frameSize;
+  }
+
+  // 2. Spectral flux (positive energy difference = onset likelihood)
+  const flux = new Float32Array(numFrames);
+  for (let i = 1; i < numFrames; i++) {
+    const diff = energy[i] - energy[i - 1];
+    flux[i] = diff > 0 ? diff : 0;
+  }
+
+  // 3. Adaptive threshold for onset detection
+  const windowLen = 20; // ~100ms median window
+  const onsets = [];
+  const minOnsetDist = Math.floor(0.1 * sr / hopSize); // min 100ms between onsets
+
+  for (let i = windowLen; i < numFrames - windowLen; i++) {
+    // Local median threshold
+    let localVals = [];
+    for (let j = i - windowLen; j <= i + windowLen; j++) localVals.push(flux[j]);
+    localVals.sort((a, b) => a - b);
+    const median = localVals[Math.floor(localVals.length * 0.7)];
+    const threshold = median * 1.8 + 0.0001;
+
+    if (flux[i] > threshold && flux[i] >= flux[i - 1] && flux[i] >= flux[i + 1]) {
+      if (onsets.length === 0 || i - onsets[onsets.length - 1] >= minOnsetDist) {
+        onsets.push(i);
+      }
+    }
+  }
+
+  if (onsets.length < 8) return { bpm: 0, firstBeat: 0 };
+
+  // 4. Autocorrelation on onset pulse train
+  const onsetSignal = new Float32Array(numFrames);
+  onsets.forEach(o => { onsetSignal[o] = 1; });
+
+  // BPM range: 60-180 → interval range in frames
+  const frameRate = sr / hopSize;
+  const minLag = Math.floor(frameRate * 60 / 180); // 180 BPM
+  const maxLag = Math.floor(frameRate * 60 / 60);  // 60 BPM
+  const acLen = Math.min(maxLag + 1, numFrames);
+
+  let bestLag = minLag, bestCorr = 0;
+  for (let lag = minLag; lag <= Math.min(maxLag, acLen); lag++) {
+    let corr = 0;
+    const limit = Math.min(numFrames - lag, numFrames);
+    for (let i = 0; i < limit; i++) {
+      corr += onsetSignal[i] * onsetSignal[i + lag];
+    }
+    // Weight towards common tempos (120-130 BPM)
+    const bpmAtLag = frameRate * 60 / lag;
+    const tempoWeight = 1 + 0.1 * Math.exp(-Math.pow((bpmAtLag - 125) / 30, 2));
+    corr *= tempoWeight;
+
+    if (corr > bestCorr) {
+      bestCorr = corr;
+      bestLag = lag;
+    }
+  }
+
+  let bpm = frameRate * 60 / bestLag;
+  // Normalize to 70-170 range (prefer doubling/halving)
+  while (bpm > 170) bpm /= 2;
+  while (bpm < 70) bpm *= 2;
+  bpm = Math.round(bpm * 10) / 10; // 1 decimal precision
+
+  // 5. Find first beat position (first strong onset)
+  const beatInterval = 60 / bpm; // seconds
+  const firstBeat = onsets.length > 0 ? (onsets[0] * hopSize / sr) : 0;
+
+  return { bpm, firstBeat };
+}
+
+// === Beat Grid ===
+function buildBeatGrid(bpm, firstBeat, duration) {
+  if (bpm <= 0 || duration <= 0) return [];
+  const interval = 60 / bpm;
+  const grid = [];
+  // Align grid to start from firstBeat, extend backwards if needed
+  let pos = firstBeat;
+  while (pos > interval) pos -= interval;
+  while (pos < duration) {
+    if (pos >= 0) grid.push(pos);
+    pos += interval;
+  }
+  return grid;
+}
+
+// Get the beat phase: position within the current beat (0.0 - 1.0)
+function getBeatPhase(d) {
+  const s = deck[d];
+  if (s.bpm <= 0) return 0;
+  const pos = getPos(d);
+  const interval = 60 / s.bpm;
+  // Phase relative to beat grid
+  let phase = ((pos - s.firstBeat) % interval) / interval;
+  if (phase < 0) phase += 1;
+  return phase;
+}
+
+// Get nearest beat position to current playback
+function getNearestBeat(d) {
+  const s = deck[d];
+  if (s.bpm <= 0) return getPos(d);
+  const pos = getPos(d);
+  const interval = 60 / s.bpm;
+  const beatNum = Math.round((pos - s.firstBeat) / interval);
+  return s.firstBeat + beatNum * interval;
+}
+
+// === Sync State ===
+let syncLocked = false;
+let syncFollower = null; // 'A' or 'B'
+
+function updatePitchUI(d, value) {
+  const sl = $(d === 'A' ? 'pitchA' : 'pitchB');
+  const valEl = $(d === 'A' ? 'pitchValA' : 'pitchValB');
+  sl.value = value;
+  const pct = Math.round((value - 1) * 100);
+  valEl.textContent = (pct >= 0 ? '+' : '') + pct + '%';
+  valEl.classList.toggle('negative', pct < 0);
+}
+
+// Reset pitch of a single deck to 1.0
+function resetPitch(d) {
+  deck[d].pitch = 1;
+  players[d].playbackRate = 1;
+  updatePitchUI(d, 1);
+}
+
+// Reset both decks' pitch
+function resetBothPitch() {
+  resetPitch('A');
+  resetPitch('B');
+  $('syncABtn')?.classList.remove('synced');
+  $('syncBBtn')?.classList.remove('synced');
+  $('syncStatus').textContent = '↺ Pitch reset';
+  setTimeout(() => { $('syncStatus').textContent = ''; }, 2000);
+}
+
+// Sync: reset both first, then follower adjusts to master's BASE BPM
+function performSync(follower) {
+  const master = follower === 'A' ? 'B' : 'A';
+  if (!players[master].buffer?.loaded || !players[follower].buffer?.loaded) {
+    alert('Загрузите оба трека'); return;
+  }
+
+  // Step 1: Reset both decks to base pitch
+  resetPitch('A');
+  resetPitch('B');
+
+  const bpmM = deck[master].bpm, bpmF = deck[follower].bpm;
+  const stEl = $('syncStatus');
+
+  if (bpmM > 0 && bpmF > 0) {
+    // Step 2: Apply sync — only follower changes
+    const newPitch = Math.max(0.5, Math.min(1.5, bpmM / bpmF));
+    deck[follower].pitch = newPitch;
+    players[follower].playbackRate = newPitch;
+    updatePitchUI(follower, newPitch);
+
+    // Phase alignment
+    if (deck.A.playing && deck.B.playing) {
+      const phaseM = getBeatPhase(master);
+      const intervalF = 60 / bpmF;
+      const posF = getPos(follower);
+      const curBeat = Math.floor((posF - deck[follower].firstBeat) / intervalF);
+      const beatStart = deck[follower].firstBeat + curBeat * intervalF;
+      const target = beatStart + phaseM * intervalF;
+      let diff = phaseM - getBeatPhase(follower);
+      if (diff > 0.5) diff -= 1;
+      if (diff < -0.5) diff += 1;
+      if (Math.abs(diff) > 0.05) {
+        const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
+        seekDeck(follower, clamped / getDur(follower));
+      }
+    }
+
+    syncFollower = follower;
+    const pct = Math.round((newPitch - 1) * 100);
+    stEl.textContent = '✅ ' + follower + '→' + master + ' | ' + bpmF + '→' + bpmM +
+      ' BPM | pitch ' + (pct >= 0 ? '+' : '') + pct + '%';
+    $('syncABtn')?.classList.toggle('synced', follower === 'A');
+    $('syncBBtn')?.classList.toggle('synced', follower === 'B');
+  } else {
+    if (deck.A.playing && deck.B.playing) {
+      seekDeck(follower, getPos(master) / getDur(master));
+      stEl.textContent = '✅ Phase sync (BPM не определён)';
+    } else {
+      alert('Оба трека должны играть');
+    }
+  }
+  setTimeout(() => { if (!syncLocked) stEl.textContent = ''; }, 4000);
+}
+
+// Continuous sync: per-frame phase correction
+function continuousSync() {
+  if (!syncLocked || !syncFollower) return;
+  const f = syncFollower, m = f === 'A' ? 'B' : 'A';
+  if (!deck[m].playing || !deck[f].playing) return;
+  if (deck[m].bpm <= 0 || deck[f].bpm <= 0) return;
+
+  const bpmM = deck[m].bpm, bpmF = deck[f].bpm;
+  const targetPitch = Math.max(0.5, Math.min(1.5, bpmM / bpmF));
+
+  // Keep pitch locked (no drift)
+  if (Math.abs(deck[f].pitch - targetPitch) > 0.001) {
+    deck[f].pitch = targetPitch;
+    updatePitchUI(f, targetPitch);
+  }
+
+  // Phase correction
+  const phaseM = getBeatPhase(m), phaseF = getBeatPhase(f);
+  let pd = phaseM - phaseF;
+  if (pd > 0.5) pd -= 1;
+  if (pd < -0.5) pd += 1;
+  const absDiff = Math.abs(pd);
+
+  if (absDiff > 0.03 && absDiff < 0.15) {
+    players[f].playbackRate = targetPitch + (pd > 0 ? 0.003 : -0.003);
+  } else if (absDiff >= 0.15) {
+    const intervalF = 60 / bpmF;
+    const posF = getPos(f);
+    const cb = Math.round((posF - deck[f].firstBeat) / intervalF);
+    const tp = deck[f].firstBeat + cb * intervalF + phaseM * intervalF;
+    if (tp > 0 && tp < getDur(f)) seekDeck(f, tp / getDur(f));
+    players[f].playbackRate = targetPitch;
+  } else {
+    players[f].playbackRate = targetPitch;
+  }
+
+  $('syncStatus').textContent = '🔒 Lock ' + f + '→' + m +
+    ' | Δ' + Math.round(absDiff * 100) + '% | ' + bpmM + ' BPM';
+}
+
+// === Load ===
+function loadDeck(d,url){
+  const p=players[d],s=deck[d];
+  const stEl=$(d==='A'?'statusA':'statusB');
+  stEl.textContent='⏳ Loading...';
+  if(s.fileUrl)URL.revokeObjectURL(s.fileUrl);
+  s.fileUrl=url;s.offset=0;s.startTime=0;s.loopIn=-1;s.loopOut=-1;s.loopActive=false;
+  updateLoopUI(d);
+  p.load(url).then(()=>{
+    const result=detectBPM(p.buffer);
+    s.bpm=result.bpm;
+    s.firstBeat=result.firstBeat;
+    s.bars=computeBars(p.buffer,200);
+    stEl.textContent='🎵 Ready';
+    $(d==='A'?'bpmA':'bpmB').textContent=s.bpm?s.bpm+' BPM':'— BPM';
+    $(d==='A'?'durA':'durB').textContent=fmtTime(getDur(d));
+    if(s.playing){p.stop();p.playbackRate=s.pitch;p.start(undefined,0);s.startTime=Tone.now();s.offset=0;}
+  }).catch(()=>{stEl.textContent='❌ Error';});
+}
+
+// === Play/Pause ===
+function playDeck(d){
+  const p=players[d],s=deck[d];
+  if(!p.buffer?.loaded)return;
+  if(s.playing){
+    s.offset=getPos(d);p.stop();s.playing=false;
+    $(d==='A'?'playA':'playB').textContent='▶ Play';
+    $(d==='A'?'playA':'playB').classList.remove('playing');
+  }else{
+    if(s.offset>=getDur(d))s.offset=0;
+    p.playbackRate=s.pitch;p.start(undefined,s.offset);s.startTime=Tone.now();s.playing=true;
+    $(d==='A'?'playA':'playB').textContent='⏸ Pause';
+    $(d==='A'?'playA':'playB').classList.add('playing');
+  }
+}
+
+// === Seek ===
+function seekDeck(d,frac){
+  const p=players[d],s=deck[d];
+  if(!p.buffer?.loaded)return;
+  const pos=Math.max(0,Math.min(frac,0.999))*getDur(d);
+  s.offset=pos;
+  if(s.playing){p.stop();p.playbackRate=s.pitch;p.start(undefined,pos);s.startTime=Tone.now();}
+  $(d==='A'?'timeA':'timeB').textContent=fmtTime(pos);
+}
+
+function setupWaveformInteraction(cid,d){
+  const c=$(cid);let drag=false;
+  function frac(e){const r=c.getBoundingClientRect();const cx=e.touches?e.touches[0].clientX:e.clientX;return Math.max(0,Math.min(1,(cx-r.left)/r.width));}
+  c.addEventListener('mousedown',e=>{drag=true;seekDeck(d,frac(e));});
+  c.addEventListener('mousemove',e=>{if(drag)seekDeck(d,frac(e));});
+  window.addEventListener('mouseup',()=>{drag=false;});
+  c.addEventListener('touchstart',e=>{drag=true;seekDeck(d,frac(e));e.preventDefault();},{passive:false});
+  c.addEventListener('touchmove',e=>{if(drag)seekDeck(d,frac(e));e.preventDefault();},{passive:false});
+  c.addEventListener('touchend',()=>{drag=false;});
+}
+setupWaveformInteraction('waveA','A');
+setupWaveformInteraction('waveB','B');
+
+// === A-B Loop ===
+function updateLoopUI(d){
+  const s=deck[d];
+  const inBtn=$('loopIn'+d),outBtn=$('loopOut'+d),togBtn=$('loopToggle'+d),info=$('loopInfo'+d);
+  inBtn.classList.toggle('set',s.loopIn>=0);
+  outBtn.classList.toggle('set',s.loopOut>=0);
+  togBtn.classList.toggle('active',s.loopActive);
+  if(s.loopIn>=0&&s.loopOut>0){info.textContent=fmtTime(s.loopIn)+' → '+fmtTime(s.loopOut);}
+  else if(s.loopIn>=0){info.textContent='A: '+fmtTime(s.loopIn);}
+  else{info.textContent='';}
+}
+function setupLoop(d){
+  $('loopIn'+d).addEventListener('click',()=>{deck[d].loopIn=getPos(d);if(deck[d].loopOut>=0&&deck[d].loopOut<=deck[d].loopIn)deck[d].loopOut=-1;updateLoopUI(d);});
+  $('loopOut'+d).addEventListener('click',()=>{const pos=getPos(d);if(deck[d].loopIn>=0&&pos>deck[d].loopIn){deck[d].loopOut=pos;deck[d].loopActive=true;}updateLoopUI(d);});
+  $('loopToggle'+d).addEventListener('click',()=>{if(deck[d].loopIn>=0&&deck[d].loopOut>deck[d].loopIn){deck[d].loopActive=!deck[d].loopActive;}updateLoopUI(d);});
+  $('loopClear'+d).addEventListener('click',()=>{deck[d].loopIn=-1;deck[d].loopOut=-1;deck[d].loopActive=false;updateLoopUI(d);});
+}
+setupLoop('A');setupLoop('B');
+
+// === Pitch ===
+function setupPitch(d){
+  const sl=$(d==='A'?'pitchA':'pitchB'),val=$(d==='A'?'pitchValA':'pitchValB');
+  sl.addEventListener('input',()=>{
+    const v=parseFloat(sl.value);deck[d].pitch=v;players[d].playbackRate=v;
+    const pct=Math.round((v-1)*100);val.textContent=(pct>=0?'+':'')+pct+'%';val.classList.toggle('negative',pct<0);
+  });
+  addReset(d==='A'?'pitchA':'pitchB', 1, () => {
+    deck[d].pitch=1;players[d].playbackRate=1;val.textContent='0%';val.classList.remove('negative');
+  });
+}
+setupPitch('A');setupPitch('B');
+
+// === Sync button handlers (with double-tap reset) ===
+let lastSyncTapA = 0, lastSyncTapB = 0;
+
+$('syncABtn')?.addEventListener('click', () => {
+  const now = Date.now();
+  if (now - lastSyncTapA < 400) { resetBothPitch(); lastSyncTapA = 0; return; }
+  lastSyncTapA = now;
+  performSync('A');
+});
+$('syncBBtn')?.addEventListener('click', () => {
+  const now = Date.now();
+  if (now - lastSyncTapB < 400) { resetBothPitch(); lastSyncTapB = 0; return; }
+  lastSyncTapB = now;
+  performSync('B');
+});
+
+$('syncLockBtn')?.addEventListener('click', () => {
+  syncLocked = !syncLocked;
+  $('syncLockBtn').classList.toggle('active', syncLocked);
+  $('syncLockBtn').textContent = syncLocked ? '🔓 Unlock' : '🔒 Lock';
+  if (syncLocked) {
+    if (syncFollower) {
+      performSync(syncFollower);
+      $('syncStatus').textContent = '🔒 Lock ' + syncFollower + ' активен';
+    } else {
+      $('syncStatus').textContent = '⚠ Сначала нажмите Sync A или Sync B';
+      syncLocked = false;
+      $('syncLockBtn').classList.remove('active');
+      $('syncLockBtn').textContent = '🔒 Lock';
+    }
+  } else {
+    $('syncStatus').textContent = '';
+    $('syncABtn')?.classList.remove('synced');
+    $('syncBBtn')?.classList.remove('synced');
+    if (syncFollower) players[syncFollower].playbackRate = deck[syncFollower].pitch;
+  }
+});
+
+// === File loading ===
+$('localA')?.addEventListener('click',()=>$('fileA').click());
+$('localB')?.addEventListener('click',()=>$('fileB').click());
+$('fileA')?.addEventListener('change',e=>{if(e.target.files[0])loadDeck('A',URL.createObjectURL(e.target.files[0]));});
+$('fileB')?.addEventListener('change',e=>{if(e.target.files[0])loadDeck('B',URL.createObjectURL(e.target.files[0]));});
+$('tgA')?.addEventListener('click',()=>{if(TG){TG.sendData(JSON.stringify({action:'get_track',deck:'A'}));TG.showAlert('Откройте @DjKatzmixbot → /tracks');}else alert('Бот: @DjKatzmixbot → /tracks');});
+$('tgB')?.addEventListener('click',()=>{if(TG){TG.sendData(JSON.stringify({action:'get_track',deck:'B'}));TG.showAlert('Откройте @DjKatzmixbot → /tracks');}else alert('Бот: @DjKatzmixbot → /tracks');});
+$('playA').addEventListener('click',()=>playDeck('A'));
+$('playB').addEventListener('click',()=>playDeck('B'));
+
+// === EQ & Controls (with double-tap reset) ===
+function addReset(id, defaultVal, onReset) {
+  const el = $(id);
+  if (!el) return;
+  // Desktop: dblclick
+  el.addEventListener('dblclick', () => { el.value = defaultVal; onReset(defaultVal); });
+  // Mobile: double-tap (two taps within 300ms)
+  let lastTap = 0;
+  el.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) { e.preventDefault(); el.value = defaultVal; onReset(defaultVal); }
+    lastTap = now;
+  });
+}
+
+$('eqLowA')?.addEventListener('input', e => eqA.low.value = parseFloat(e.target.value));
+$('eqMidA')?.addEventListener('input', e => eqA.mid.value = parseFloat(e.target.value));
+$('eqHighA')?.addEventListener('input', e => eqA.high.value = parseFloat(e.target.value));
+$('gainA')?.addEventListener('input', e => gainA.gain.value = parseFloat(e.target.value));
+$('eqLowB')?.addEventListener('input', e => eqB.low.value = parseFloat(e.target.value));
+$('eqMidB')?.addEventListener('input', e => eqB.mid.value = parseFloat(e.target.value));
+$('eqHighB')?.addEventListener('input', e => eqB.high.value = parseFloat(e.target.value));
+$('gainB')?.addEventListener('input', e => gainB.gain.value = parseFloat(e.target.value));
+$('crossfader')?.addEventListener('input', e => crossFade.fade.value = parseFloat(e.target.value));
+$('masterVol')?.addEventListener('input', e => masterGain.gain.value = parseFloat(e.target.value));
+
+// Double-tap resets: EQ → 0, Gain → 1, Crossfader → 0.5, Master → 0.8
+addReset('eqLowA', 0, v => { eqA.low.value = v; });
+addReset('eqMidA', 0, v => { eqA.mid.value = v; });
+addReset('eqHighA', 0, v => { eqA.high.value = v; });
+addReset('gainA', 1, v => { gainA.gain.value = v; });
+addReset('eqLowB', 0, v => { eqB.low.value = v; });
+addReset('eqMidB', 0, v => { eqB.mid.value = v; });
+addReset('eqHighB', 0, v => { eqB.high.value = v; });
+addReset('gainB', 1, v => { gainB.gain.value = v; });
+addReset('crossfader', 0.5, v => { crossFade.fade.value = v; });
+addReset('masterVol', 0.8, v => { masterGain.gain.value = v; });
+
+document.querySelectorAll('.fx-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const d=btn.dataset.deck,fx=btn.dataset.fx,set=d==='A'?fxA:fxB;
+    if(activeFx[d][fx]){set[fx].wet.value=0;activeFx[d][fx]=false;btn.classList.remove('active');}
+    else{set[fx].wet.value=0.5;activeFx[d][fx]=true;btn.classList.add('active');}
+  });
+});
+
+// === Recording ===
+$('recordBtn')?.addEventListener('click',()=>{
+  const btn=$('recordBtn'),st=$('recStatus');
+  if(!isRecording){
+    audioChunks=[];mediaRecorder=new MediaRecorder(dest.stream);
+    mediaRecorder.ondataavailable=e=>audioChunks.push(e.data);
+    mediaRecorder.onstop=()=>{const b=new Blob(audioChunks,{type:'audio/webm'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`katz_mix_${Date.now()}.webm`;a.click();st.textContent='✅ Сохранено!';setTimeout(()=>st.textContent='',3000);};
+    mediaRecorder.start();isRecording=true;btn.textContent='⏹ Стоп';btn.classList.add('recording');st.textContent='🔴 Запись...';
+  }else{mediaRecorder.stop();isRecording=false;btn.textContent='⏺ Запись';btn.classList.remove('recording');}
+});
+
+// === Animation ===
+let rotA=0,rotB=0;
+const vA=$('vinylA'),vB=$('vinylB');
+if(vA){vA.width=168;vA.height=168;}if(vB){vB.width=168;vB.height=168;}
+
+function animate(){
+  if(deck.A.playing)rotA+=0.02*deck.A.pitch;
+  if(deck.B.playing)rotB+=0.02*deck.B.pitch;
+  drawVinyl(vA,deck.A.playing,rotA,'#00e5ff');
+  drawVinyl(vB,deck.B.playing,rotB,'#ff00e5');
+  drawWaveform($('waveA'),'A','#00e5ff');
+  drawWaveform($('waveB'),'B','#ff00e5');
+  $('timeA').textContent=fmtTime(getPos('A'));
+  $('timeB').textContent=fmtTime(getPos('B'));
+
+  // A-B Loop enforcement + continuous sync
+  continuousSync();
+  ['A','B'].forEach(d=>{
+    const s=deck[d];
+    if(s.playing&&s.loopActive&&s.loopIn>=0&&s.loopOut>s.loopIn){
+      const pos=getPos(d);
+      if(pos>=s.loopOut){seekDeck(d,s.loopIn/getDur(d));}
+    }
+    // Auto-stop at end
+    if(s.playing&&getPos(d)>=getDur(d)){
+      s.playing=false;s.offset=0;players[d].stop();
+      $(d==='A'?'playA':'playB').textContent='▶ Play';
+      $(d==='A'?'playA':'playB').classList.remove('playing');
+    }
+  });
+  requestAnimationFrame(animate);
+}
+drawVinyl(vA,false,0,'#00e5ff');drawVinyl(vB,false,0,'#ff00e5');
+drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
+animate();
+
+const startAudio=()=>{if(Tone.context.state!=='running')Tone.start();};
+document.body.addEventListener('touchstart',startAudio,{once:true});
+document.body.addEventListener('click',startAudio,{once:true});
+})();

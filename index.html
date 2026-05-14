@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="Katz Studio Pro — профессиональный DJ-миксер прямо в Telegram">
+    <title>Katz Studio Pro</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="container">
+    <!-- Header -->
+    <div class="header">
+        <h1>🎧 KATZ STUDIO</h1>
+        <div class="sub">Pro Mixer • Telegram Mini App</div>
+    </div>
+
+    <!-- DECK A -->
+    <div class="deck deck-a" id="deckA">
+        <div class="deck-header">
+            <div class="deck-label"><span class="dot"></span> DECK A</div>
+            <div class="deck-status" id="statusA">⚡ Empty</div>
+        </div>
+        <div class="visual-row">
+            <div class="vinyl-wrap">
+                <canvas class="vinyl-canvas" id="vinylA"></canvas>
+            </div>
+            <div class="waveform-wrap" id="waveWrapA">
+                <canvas class="waveform-canvas" id="waveA"></canvas>
+            </div>
+        </div>
+        <div class="transport-row">
+            <button class="btn btn-play" id="playA">▶ Play</button>
+            <button class="btn btn-load" id="localA">📁 Файл</button>
+            <button class="btn btn-tg" id="tgA">💬 Telegram</button>
+            <input type="file" id="fileA" accept="audio/*">
+            <span class="bpm-badge" id="bpmA">— BPM</span>
+        </div>
+        <div class="time-row">
+            <span class="time-current" id="timeA">0:00</span>
+            <span class="time-duration" id="durA">0:00</span>
+        </div>
+        <div class="pitch-row">
+            <span class="pitch-label">PITCH</span>
+            <input type="range" class="pitch-slider" id="pitchA" min="0.5" max="1.5" step="0.01" value="1">
+            <span class="pitch-value" id="pitchValA">0%</span>
+        </div>
+        <div class="eq-row">
+            <div class="eq-group">
+                <span class="eq-label">Low</span>
+                <input type="range" class="eq-slider" id="eqLowA" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group">
+                <span class="eq-label">Mid</span>
+                <input type="range" class="eq-slider" id="eqMidA" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group">
+                <span class="eq-label">High</span>
+                <input type="range" class="eq-slider" id="eqHighA" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group gain-group">
+                <span class="eq-label">Gain</span>
+                <input type="range" class="eq-slider" id="gainA" min="0" max="1.5" step="0.01" value="1">
+            </div>
+        </div>
+        <div class="fx-row">
+            <button class="fx-btn" data-deck="A" data-fx="delay">Echo</button>
+            <button class="fx-btn" data-deck="A" data-fx="reverb">Reverb</button>
+            <button class="fx-btn" data-deck="A" data-fx="phaser">Phaser</button>
+        </div>
+        <div class="loop-row">
+            <button class="loop-btn" id="loopInA" data-deck="A">A</button>
+            <button class="loop-btn" id="loopOutA" data-deck="A">B</button>
+            <button class="loop-btn loop-toggle" id="loopToggleA" data-deck="A">🔁 Loop</button>
+            <button class="loop-btn loop-clear" id="loopClearA" data-deck="A">✕</button>
+            <span class="loop-info" id="loopInfoA"></span>
+        </div>
+    </div>
+
+    <!-- DECK B -->
+    <div class="deck deck-b" id="deckB">
+        <div class="deck-header">
+            <div class="deck-label"><span class="dot"></span> DECK B</div>
+            <div class="deck-status" id="statusB">⚡ Empty</div>
+        </div>
+        <div class="visual-row">
+            <div class="vinyl-wrap">
+                <canvas class="vinyl-canvas" id="vinylB"></canvas>
+            </div>
+            <div class="waveform-wrap" id="waveWrapB">
+                <canvas class="waveform-canvas" id="waveB"></canvas>
+            </div>
+        </div>
+        <div class="transport-row">
+            <button class="btn btn-play" id="playB">▶ Play</button>
+            <button class="btn btn-load" id="localB">📁 Файл</button>
+            <button class="btn btn-tg" id="tgB">💬 Telegram</button>
+            <input type="file" id="fileB" accept="audio/*">
+            <span class="bpm-badge" id="bpmB">— BPM</span>
+        </div>
+        <div class="time-row">
+            <span class="time-current" id="timeB">0:00</span>
+            <span class="time-duration" id="durB">0:00</span>
+        </div>
+        <div class="pitch-row">
+            <span class="pitch-label">PITCH</span>
+            <input type="range" class="pitch-slider" id="pitchB" min="0.5" max="1.5" step="0.01" value="1">
+            <span class="pitch-value" id="pitchValB">0%</span>
+        </div>
+        <div class="eq-row">
+            <div class="eq-group">
+                <span class="eq-label">Low</span>
+                <input type="range" class="eq-slider" id="eqLowB" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group">
+                <span class="eq-label">Mid</span>
+                <input type="range" class="eq-slider" id="eqMidB" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group">
+                <span class="eq-label">High</span>
+                <input type="range" class="eq-slider" id="eqHighB" min="-12" max="12" step="0.5" value="0">
+            </div>
+            <div class="eq-group gain-group">
+                <span class="eq-label">Gain</span>
+                <input type="range" class="eq-slider" id="gainB" min="0" max="1.5" step="0.01" value="1">
+            </div>
+        </div>
+        <div class="fx-row">
+            <button class="fx-btn" data-deck="B" data-fx="delay">Echo</button>
+            <button class="fx-btn" data-deck="B" data-fx="reverb">Reverb</button>
+            <button class="fx-btn" data-deck="B" data-fx="phaser">Phaser</button>
+        </div>
+        <div class="loop-row">
+            <button class="loop-btn" id="loopInB" data-deck="B">A</button>
+            <button class="loop-btn" id="loopOutB" data-deck="B">B</button>
+            <button class="loop-btn loop-toggle" id="loopToggleB" data-deck="B">🔁 Loop</button>
+            <button class="loop-btn loop-clear" id="loopClearB" data-deck="B">✕</button>
+            <span class="loop-info" id="loopInfoB"></span>
+        </div>
+    </div>
+
+    <!-- MASTER -->
+    <div class="master">
+        <div class="master-title">Master Control</div>
+        <div class="crossfader-wrap">
+            <div class="cf-labels"><span>A</span><span>CROSSFADER</span><span>B</span></div>
+            <input type="range" class="crossfader" id="crossfader" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        <div class="master-vol-row">
+            <span class="master-vol-label">🔊 Master</span>
+            <input type="range" class="master-slider" id="masterVol" min="0" max="1.5" step="0.01" value="0.8">
+        </div>
+        <div class="master-buttons">
+            <button class="btn-sync btn-sync-a" id="syncABtn">🔄 Sync A</button>
+            <button class="btn-sync btn-sync-b" id="syncBBtn">🔄 Sync B</button>
+            <button class="btn-sync-lock" id="syncLockBtn">🔒 Lock</button>
+            <button class="btn-record" id="recordBtn">⏺ Запись</button>
+        </div>
+        <div class="sync-status" id="syncStatus"></div>
+        <div class="record-status" id="recStatus"></div>
+    </div>
+
+    <footer>v3.4 • Katz Studio Pro • Sync A/B • Beat Grid • Waveform</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
