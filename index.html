@@ -34,7 +34,7 @@
             <button class="btn btn-play" id="playA">▶ Play</button>
             <button class="btn btn-load" id="localA">📁 Файл</button>
             <button class="btn btn-tg" id="tgA">💬 Telegram</button>
-            <input type="file" id="fileA" accept="audio/*">
+            <input type="file" id="fileA" accept="audio/*, .mp3, .wav, .m4a, .aac, .ogg, .flac">
             <span class="bpm-badge" id="bpmA">— BPM</span>
         </div>
         <div class="time-row">
@@ -96,7 +96,7 @@
             <button class="btn btn-play" id="playB">▶ Play</button>
             <button class="btn btn-load" id="localB">📁 Файл</button>
             <button class="btn btn-tg" id="tgB">💬 Telegram</button>
-            <input type="file" id="fileB" accept="audio/*">
+            <input type="file" id="fileB" accept="audio/*, .mp3, .wav, .m4a, .aac, .ogg, .flac">
             <span class="bpm-badge" id="bpmB">— BPM</span>
         </div>
         <div class="time-row">
@@ -162,6 +162,21 @@
     </div>
 
     <footer>v3.4 • Katz Studio Pro • Sync A/B • Beat Grid • Waveform</footer>
+</div>
+
+<!-- Track Browser Modal -->
+<div class="modal-overlay" id="trackBrowserModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>📁 Выберите трек из Telegram</h2>
+            <button class="modal-close" id="closeTrackBrowser">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="trackList" class="track-list">
+                <div class="track-loading">Загрузка треков...</div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.js"></script>
