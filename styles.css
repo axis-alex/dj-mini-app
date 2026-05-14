@@ -97,16 +97,22 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 .vinyl-canvas { width: 84px; height: 84px; }
-.waveform-wrap {
-  flex: 1; height: 80px;
-  background: rgba(0,0,0,0.5);
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid rgba(60,60,100,0.2);
+.stacked-waveforms {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-bottom: 15px; background: rgba(10,10,20,0.8);
+  border-radius: 12px; padding: 5px;
+  border: 1px solid rgba(80,80,160,0.3);
 }
+.waveform-wrap {
+  width: 100%; height: 60px;
+  background: rgba(0,0,0,0.5);
+  border-radius: 6px; overflow: hidden;
+  position: relative;
+}
+.deck-a-wave { border-bottom: 1px solid rgba(0,229,255,0.3); }
+.deck-b-wave { border-bottom: 1px solid rgba(255,0,229,0.3); }
 .waveform-canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
-.waveform-wrap { position: relative; }
-.waveform-wrap:active { border-color: rgba(100,100,180,0.4); }
+.waveform-wrap:active { opacity: 0.8; }
 
 /* Time row */
 .time-row {
