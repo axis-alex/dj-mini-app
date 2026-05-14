@@ -69,41 +69,64 @@ function drawWaveform(canvas,d,accent){
     return;
   }
 
-  const numBars=bars.length;
+  const zoom = s.zoom || 1;
   const dur=getDur(d);
   const pos=getPos(d);
   const progress=dur>0?pos/dur:0;
-  const playX=progress*w;
+  
+  const numBars=bars.length;
+  const visibleFraction = 1 / zoom;
+  let startFraction = progress - visibleFraction / 2;
+  let endFraction = progress + visibleFraction / 2;
+  
+  if (startFraction < 0) {
+    startFraction = 0;
+    endFraction = Math.min(1, visibleFraction);
+  }
+  if (endFraction > 1) {
+    endFraction = 1;
+    startFraction = Math.max(0, 1 - visibleFraction);
+  }
+  
+  const startIndex = Math.floor(startFraction * numBars);
+  const endIndex = Math.min(numBars, Math.ceil(endFraction * numBars));
+  const visibleBarsCount = endIndex - startIndex;
+  
+  const playX = ((progress - startFraction) / visibleFraction) * w;
 
   // Loop region
   const loopIn=s.loopIn,loopOut=s.loopOut;
   const hasLoop=loopIn>=0&&loopOut>loopIn;
   if(hasLoop){
-    const x1=(loopIn/dur)*w, x2=(loopOut/dur)*w;
-    ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.08)':'rgba(0,230,118,0.04)';
-    ctx.fillRect(x1,0,x2-x1,h);
-    // Loop markers
-    ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.6)':'rgba(0,230,118,0.3)';
-    ctx.fillRect(x1,0,1.5*dpr,h);
-    ctx.fillRect(x2-1.5*dpr,0,1.5*dpr,h);
+    const loopInFrac = loopIn / dur;
+    const loopOutFrac = loopOut / dur;
+    if (loopOutFrac > startFraction && loopInFrac < endFraction) {
+      const x1 = Math.max(0, ((loopInFrac - startFraction) / visibleFraction) * w);
+      const x2 = Math.min(w, ((loopOutFrac - startFraction) / visibleFraction) * w);
+      ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.08)':'rgba(0,230,118,0.04)';
+      ctx.fillRect(x1,0,x2-x1,h);
+      // Loop markers
+      ctx.fillStyle=s.loopActive?'rgba(0,230,118,0.6)':'rgba(0,230,118,0.3)';
+      if (x1 >= 0 && x1 <= w) ctx.fillRect(x1,0,1.5*dpr,h);
+      if (x2 >= 0 && x2 <= w) ctx.fillRect(x2-1.5*dpr,0,1.5*dpr,h);
+    }
   }
 
   // Bar dimensions
   const barGap=1*dpr;
-  const totalBarW=w/numBars;
+  const totalBarW=w/visibleBarsCount;
   const barW=Math.max(1,totalBarW-barGap);
-  const mainH=h*0.65; // main bars take 65% height
-  const refH=h*0.25;  // reflection 25%
-  const midY=mainH;   // divider line
+  const mainH=h*0.65;
+  const refH=h*0.25;
+  const midY=mainH;
 
-  for(let i=0;i<numBars;i++){
-    const amp=bars[i];
+  for(let i=0;i<visibleBarsCount;i++){
+    const amp=bars[startIndex + i] || 0;
     const x=i*totalBarW;
     const bh=Math.max(1*dpr, amp*mainH*0.95);
     const rh=Math.max(0, amp*refH*0.6);
     const isPast=x<playX;
 
-    // Main bar (grows upward from midY)
     if(isPast){
       ctx.fillStyle=accent;
       ctx.globalAlpha=0.85;
@@ -111,7 +134,6 @@ function drawWaveform(canvas,d,accent){
       ctx.fillStyle=accent;
       ctx.globalAlpha=0.25;
     }
-    // Rounded top
     const bx=x+barGap/2;
     const by=midY-bh;
     const radius=Math.min(barW/2, 2*dpr);
@@ -125,7 +147,6 @@ function drawWaveform(canvas,d,accent){
     ctx.quadraticCurveTo(bx,by,bx+radius,by);
     ctx.fill();
 
-    // Reflection (grows downward from midY+2)
     const ry=midY+2*dpr;
     ctx.globalAlpha*=0.3;
     ctx.fillRect(bx,ry,barW,rh);
@@ -133,14 +154,13 @@ function drawWaveform(canvas,d,accent){
   }
 
   // Playhead
-  if(progress>0.001&&progress<0.999){
+  if(progress>0.001&&progress<0.999 && playX >= 0 && playX <= w){
     ctx.save();
     ctx.shadowColor=accent;
     ctx.shadowBlur=8*dpr;
     ctx.fillStyle='#ffffff';
     ctx.fillRect(playX-1*dpr,0,2*dpr,h);
     ctx.restore();
-    // Small triangle at top
     ctx.fillStyle='#ffffff';
     ctx.beginPath();
     ctx.moveTo(playX-4*dpr,0);
@@ -353,25 +373,24 @@ function performSync(follower) {
     updatePitchUI(follower, newPitch);
 
     // Phase alignment (Beat Sync)
-    if (deck[master].playing) {
-      const phaseM = getBeatPhase(master);
-      const intervalF = 60 / bpmF;
-      const posF = getPos(follower);
-      const curBeat = Math.floor((posF - deck[follower].firstBeat) / intervalF);
-      const beatStart = deck[follower].firstBeat + curBeat * intervalF;
-      let target = beatStart + phaseM * intervalF;
-      
-      // If target is behind current pos, jump to next beat
-      if (target < posF - 0.1) target += intervalF;
-      
-      const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
-      deck[follower].offset = clamped;
-      if (deck[follower].playing) {
-        players[follower].stop();
-        players[follower].playbackRate = newPitch;
-        players[follower].start(undefined, clamped);
-        deck[follower].startTime = Tone.now();
-      }
+    const phaseM = deck[master].playing ? getBeatPhase(master) : 0;
+    const phaseF = getBeatPhase(follower);
+    let phaseDiff = phaseM - phaseF;
+    
+    // Find shortest phase jump
+    if (phaseDiff > 0.5) phaseDiff -= 1;
+    if (phaseDiff < -0.5) phaseDiff += 1;
+    
+    const intervalF = 60 / bpmF;
+    const target = getPos(follower) + phaseDiff * intervalF;
+    
+    const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
+    deck[follower].offset = clamped;
+    if (deck[follower].playing) {
+      players[follower].stop();
+      players[follower].playbackRate = newPitch;
+      players[follower].start(undefined, clamped);
+      deck[follower].startTime = Tone.now();
     }
     
     syncFollower = follower;
@@ -444,7 +463,7 @@ async function loadDeck(d,url){
     const result=detectBPM(p.buffer);
     s.bpm=result.bpm;
     s.firstBeat=result.firstBeat;
-    s.bars=computeBars(p.buffer,200);
+    s.bars=computeBars(p.buffer,2000);
     stEl.textContent='🎵 Ready';
     $(d==='A'?'bpmA':'bpmB').textContent=s.bpm?s.bpm+' BPM':'— BPM';
     $(d==='A'?'durA':'durB').textContent=fmtTime(getDur(d));
@@ -481,14 +500,67 @@ async function seekDeck(d,frac){
 }
 
 function setupWaveformInteraction(cid,d){
-  const c=$(cid);let drag=false;
-  function frac(e){const r=c.getBoundingClientRect();const cx=e.touches?e.touches[0].clientX:e.clientX;return Math.max(0,Math.min(1,(cx-r.left)/r.width));}
-  c.addEventListener('mousedown',e=>{drag=true;seekDeck(d,frac(e));});
-  c.addEventListener('mousemove',e=>{if(drag)seekDeck(d,frac(e));});
-  window.addEventListener('mouseup',()=>{drag=false;});
-  c.addEventListener('touchstart',e=>{drag=true;seekDeck(d,frac(e));e.preventDefault();},{passive:false});
-  c.addEventListener('touchmove',e=>{if(drag)seekDeck(d,frac(e));e.preventDefault();},{passive:false});
-  c.addEventListener('touchend',()=>{drag=false;});
+  const c=$(cid);
+  let drag=false;
+  let lastX=0;
+  let initialPinchDist=0;
+  let initialZoom=1;
+
+  function handleDown(e) {
+    if (e.touches && e.touches.length === 2) {
+      drag = false;
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      initialPinchDist = Math.sqrt(dx*dx + dy*dy);
+      initialZoom = deck[d].zoom || 1;
+    } else {
+      drag = true;
+      lastX = e.touches ? e.touches[0].clientX : e.clientX;
+      if ((deck[d].zoom || 1) === 1) {
+        const r=c.getBoundingClientRect();
+        const f=Math.max(0,Math.min(1,(lastX-r.left)/r.width));
+        seekDeck(d, f);
+      }
+    }
+  }
+
+  function handleMove(e) {
+    if (e.touches && e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const scale = dist / initialPinchDist;
+      let newZoom = initialZoom * scale;
+      newZoom = Math.max(1, Math.min(newZoom, 20));
+      deck[d].zoom = newZoom;
+    } else if (drag) {
+      const currentX = e.touches ? e.touches[0].clientX : e.clientX;
+      const deltaX = currentX - lastX;
+      lastX = currentX;
+      
+      const zoom = deck[d].zoom || 1;
+      const r=c.getBoundingClientRect();
+      if (zoom > 1) {
+        const visibleFraction = 1 / zoom;
+        const shiftFrac = - (deltaX / r.width) * visibleFraction;
+        const dur = getDur(d);
+        const curPos = getPos(d);
+        const newPos = curPos + shiftFrac * dur;
+        seekDeck(d, newPos / dur);
+      } else {
+        const f=Math.max(0,Math.min(1,(currentX-r.left)/r.width));
+        seekDeck(d, f);
+      }
+    }
+  }
+
+  c.addEventListener('mousedown', e => { handleDown(e); });
+  c.addEventListener('mousemove', e => { if(drag) handleMove(e); });
+  window.addEventListener('mouseup', () => { drag=false; });
+  
+  c.addEventListener('touchstart', e => { handleDown(e); e.preventDefault(); }, {passive:false});
+  c.addEventListener('touchmove', e => { handleMove(e); e.preventDefault(); }, {passive:false});
+  c.addEventListener('touchend', () => { drag=false; });
 }
 setupWaveformInteraction('waveA','A');
 setupWaveformInteraction('waveB','B');
