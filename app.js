@@ -307,9 +307,10 @@ let syncFollower = null; // 'A' or 'B'
 function updatePitchUI(d, value) {
   const sl = $(d === 'A' ? 'pitchA' : 'pitchB');
   const valEl = $(d === 'A' ? 'pitchValA' : 'pitchValB');
-  sl.value = value;
-  const pct = Math.round((value - 1) * 100);
-  valEl.textContent = (pct >= 0 ? '+' : '') + pct + '%';
+  const pct = (value - 1) * 100;
+  sl.value = pct;
+  const disp = pct.toFixed(1);
+  valEl.textContent = (pct > 0 ? '+' : '') + disp + '%';
   valEl.classList.toggle('negative', pct < 0);
 }
 
@@ -345,29 +346,34 @@ function performSync(follower) {
   const stEl = $('syncStatus');
 
   if (bpmM > 0 && bpmF > 0) {
-    // Step 2: Apply sync — only follower changes
+    // Step 2: Apply sync — follower changes BPM to match master
     const newPitch = Math.max(0.5, Math.min(1.5, bpmM / bpmF));
     deck[follower].pitch = newPitch;
     players[follower].playbackRate = newPitch;
     updatePitchUI(follower, newPitch);
 
-    // Phase alignment
-    if (deck.A.playing && deck.B.playing) {
+    // Phase alignment (Beat Sync)
+    if (deck[master].playing) {
       const phaseM = getBeatPhase(master);
       const intervalF = 60 / bpmF;
       const posF = getPos(follower);
       const curBeat = Math.floor((posF - deck[follower].firstBeat) / intervalF);
       const beatStart = deck[follower].firstBeat + curBeat * intervalF;
-      const target = beatStart + phaseM * intervalF;
-      let diff = phaseM - getBeatPhase(follower);
-      if (diff > 0.5) diff -= 1;
-      if (diff < -0.5) diff += 1;
-      if (Math.abs(diff) > 0.05) {
-        const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
-        seekDeck(follower, clamped / getDur(follower));
+      let target = beatStart + phaseM * intervalF;
+      
+      // If target is behind current pos, jump to next beat
+      if (target < posF - 0.1) target += intervalF;
+      
+      const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
+      deck[follower].offset = clamped;
+      if (deck[follower].playing) {
+        players[follower].stop();
+        players[follower].playbackRate = newPitch;
+        players[follower].start(undefined, clamped);
+        deck[follower].startTime = Tone.now();
       }
     }
-
+    
     syncFollower = follower;
     const pct = Math.round((newPitch - 1) * 100);
     stEl.textContent = '✅ ' + follower + '→' + master + ' | ' + bpmF + '→' + bpmM +
@@ -510,11 +516,14 @@ setupLoop('A');setupLoop('B');
 function setupPitch(d){
   const sl=$(d==='A'?'pitchA':'pitchB'),val=$(d==='A'?'pitchValA':'pitchValB');
   sl.addEventListener('input',()=>{
-    const v=parseFloat(sl.value);deck[d].pitch=v;players[d].playbackRate=v;
-    const pct=Math.round((v-1)*100);val.textContent=(pct>=0?'+':'')+pct+'%';val.classList.toggle('negative',pct<0);
+    const sliderVal=parseFloat(sl.value);
+    const v=1 + (sliderVal/100);
+    deck[d].pitch=v;players[d].playbackRate=v;
+    const disp=sliderVal.toFixed(1);
+    val.textContent=(sliderVal>0?'+':'')+disp+'%';val.classList.toggle('negative',sliderVal<0);
   });
-  addReset(d==='A'?'pitchA':'pitchB', 1, () => {
-    deck[d].pitch=1;players[d].playbackRate=1;val.textContent='0%';val.classList.remove('negative');
+  addReset(d==='A'?'pitchA':'pitchB', 0, () => {
+    deck[d].pitch=1;players[d].playbackRate=1;val.textContent='0.0%';val.classList.remove('negative');
   });
 }
 setupPitch('A');setupPitch('B');
@@ -616,6 +625,66 @@ $('tgB')?.addEventListener('click', () => openTrackBrowser('B'));
 $('playA').addEventListener('click',()=>playDeck('A'));
 $('playB').addEventListener('click',()=>playDeck('B'));
 
+// === CUE ===
+function cueDeck(d) {
+  const p = players[d], s = deck[d];
+  if (!p.buffer?.loaded) return;
+  const cuePoint = s.loopIn >= 0 ? s.loopIn : 0;
+  
+  if (s.playing) {
+    p.stop();
+    s.playing = false;
+    s.offset = cuePoint;
+    $(d === 'A' ? 'playA' : 'playB').textContent = '▶ Play';
+    $(d === 'A' ? 'playA' : 'playB').classList.remove('playing');
+  } else {
+    s.offset = cuePoint;
+  }
+}
+
+function setupCue(d) {
+  const btn = $(d === 'A' ? 'cueA' : 'cueB');
+  if (!btn) return;
+  
+  let isCuePlaying = false;
+  
+  const startCuePlay = async (e) => {
+    e.preventDefault();
+    if (deck[d].playing && !isCuePlaying) {
+      cueDeck(d); // Regular pause and return to CUE
+    } else {
+      cueDeck(d); // jump to CUE
+      if (Tone.context.state !== 'running') await Tone.start();
+      const p = players[d], s = deck[d];
+      p.playbackRate = s.pitch;
+      p.start(undefined, s.offset);
+      s.startTime = Tone.now();
+      s.playing = true;
+      isCuePlaying = true;
+      $(d === 'A' ? 'playA' : 'playB').classList.add('playing');
+    }
+  };
+  
+  const stopCuePlay = (e) => {
+    e.preventDefault();
+    if (!isCuePlaying) return;
+    const p = players[d], s = deck[d];
+    p.stop();
+    s.playing = false;
+    isCuePlaying = false;
+    s.offset = s.loopIn >= 0 ? s.loopIn : 0;
+    $(d === 'A' ? 'playA' : 'playB').textContent = '▶ Play';
+    $(d === 'A' ? 'playA' : 'playB').classList.remove('playing');
+  };
+
+  btn.addEventListener('mousedown', startCuePlay);
+  btn.addEventListener('touchstart', startCuePlay, {passive: false});
+  btn.addEventListener('mouseup', stopCuePlay);
+  btn.addEventListener('mouseleave', stopCuePlay);
+  btn.addEventListener('touchend', stopCuePlay);
+}
+setupCue('A'); setupCue('B');
+
 // === EQ & Controls (with double-tap reset) ===
 function addReset(id, defaultVal, onReset) {
   const el = $(id);
@@ -709,7 +778,13 @@ drawVinyl(vA,false,0,'#00e5ff');drawVinyl(vB,false,0,'#ff00e5');
 drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
 animate();
 
-const startAudio=()=>{if(Tone.context.state!=='running')Tone.start();};
+const startAudio=()=>{
+  if(Tone.context.state!=='running')Tone.start();
+  const iosHack = $('iosAudioHack');
+  if (iosHack && iosHack.paused) {
+    iosHack.play().catch(e => console.log('Audio hack play prevented', e));
+  }
+};
 document.body.addEventListener('touchstart',startAudio,{once:true});
 document.body.addEventListener('click',startAudio,{once:true});
 })();
