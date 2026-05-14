@@ -426,7 +426,8 @@ function continuousSync() {
 }
 
 // === Load ===
-function loadDeck(d,url){
+async function loadDeck(d,url){
+  if (Tone.context.state !== 'running') await Tone.start();
   const p=players[d],s=deck[d];
   const stEl=$(d==='A'?'statusA':'statusB');
   stEl.textContent='⏳ Loading...';
@@ -446,7 +447,8 @@ function loadDeck(d,url){
 }
 
 // === Play/Pause ===
-function playDeck(d){
+async function playDeck(d){
+  if (Tone.context.state !== 'running') await Tone.start();
   const p=players[d],s=deck[d];
   if(!p.buffer?.loaded)return;
   if(s.playing){
@@ -462,7 +464,8 @@ function playDeck(d){
 }
 
 // === Seek ===
-function seekDeck(d,frac){
+async function seekDeck(d,frac){
+  if (Tone.context.state !== 'running') await Tone.start();
   const p=players[d],s=deck[d];
   if(!p.buffer?.loaded)return;
   const pos=Math.max(0,Math.min(frac,0.999))*getDur(d);
@@ -559,8 +562,57 @@ $('localA')?.addEventListener('click',()=>$('fileA').click());
 $('localB')?.addEventListener('click',()=>$('fileB').click());
 $('fileA')?.addEventListener('change',e=>{if(e.target.files[0])loadDeck('A',URL.createObjectURL(e.target.files[0]));});
 $('fileB')?.addEventListener('change',e=>{if(e.target.files[0])loadDeck('B',URL.createObjectURL(e.target.files[0]));});
-$('tgA')?.addEventListener('click',()=>{if(TG){TG.sendData(JSON.stringify({action:'get_track',deck:'A'}));TG.showAlert('Откройте @DjKatzmixbot → /tracks');}else alert('Бот: @DjKatzmixbot → /tracks');});
-$('tgB')?.addEventListener('click',()=>{if(TG){TG.sendData(JSON.stringify({action:'get_track',deck:'B'}));TG.showAlert('Откройте @DjKatzmixbot → /tracks');}else alert('Бот: @DjKatzmixbot → /tracks');});
+// === Track Browser Logic ===
+let currentTargetDeck = null;
+const trackModal = $('trackBrowserModal');
+const trackList = $('trackList');
+
+function openTrackBrowser(deck) {
+    currentTargetDeck = deck;
+    trackModal.classList.add('active');
+    trackList.innerHTML = '<div class="track-loading">Загрузка треков...</div>';
+    
+    const initData = window.Telegram?.WebApp?.initData || '';
+    fetch(`/api/tracks?initData=${encodeURIComponent(initData)}`)
+        .then(res => {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(tracks => {
+            trackList.innerHTML = '';
+            if (tracks.length === 0) {
+                trackList.innerHTML = '<div class="track-empty">Нет треков. Отправьте аудиофайлы боту в чат!</div>';
+                return;
+            }
+            tracks.forEach(track => {
+                const div = document.createElement('div');
+                div.className = 'track-item';
+                div.innerHTML = `
+                    <div class="track-title">${track.performer} - ${track.title}</div>
+                    <div class="track-meta">
+                        <span>${track.file_name || 'audio'}</span>
+                        <span>${fmtTime(track.duration)}</span>
+                    </div>
+                `;
+                div.addEventListener('click', () => {
+                    const streamUrl = `/api/tracks/${track.file_id}/stream?initData=${encodeURIComponent(initData)}`;
+                    loadDeck(currentTargetDeck, streamUrl);
+                    trackModal.classList.remove('active');
+                });
+                trackList.appendChild(div);
+            });
+        })
+        .catch(err => {
+            console.error(err);
+            trackList.innerHTML = '<div class="track-empty">Ошибка загрузки треков. Убедитесь, что вы открыли приложение через Telegram.</div>';
+        });
+}
+
+$('closeTrackBrowser')?.addEventListener('click', () => trackModal.classList.remove('active'));
+trackModal?.addEventListener('click', e => { if(e.target === trackModal) trackModal.classList.remove('active'); });
+
+$('tgA')?.addEventListener('click', () => openTrackBrowser('A'));
+$('tgB')?.addEventListener('click', () => openTrackBrowser('B'));
 $('playA').addEventListener('click',()=>playDeck('A'));
 $('playB').addEventListener('click',()=>playDeck('B'));
 
