@@ -89,14 +89,7 @@ body {
 .visual-row {
   display: flex; gap: 10px; margin-bottom: 10px; align-items: center;
 }
-.vinyl-wrap {
-  width: 90px; height: 90px; flex-shrink: 0;
-  border-radius: 50%;
-  background: radial-gradient(circle, #1a1a2e 30%, #0a0a14 100%);
-  border: 2px solid rgba(80,80,160,0.3);
-  display: flex; align-items: center; justify-content: center;
-}
-.vinyl-canvas { width: 84px; height: 84px; }
+
 .stacked-waveforms {
   display: flex; flex-direction: column; gap: 2px;
   margin-bottom: 15px; background: rgba(10,10,20,0.8);

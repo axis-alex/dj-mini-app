@@ -175,21 +175,7 @@ function drawWaveform(canvas,d,accent){
 }
 
 // === Vinyl ===
-function drawVinyl(canvas,playing,rot,accent){
-  const ctx=canvas.getContext('2d');
-  const w=canvas.width,h=canvas.height,cx=w/2,cy=h/2,r=w/2-4;
-  ctx.clearRect(0,0,w,h);ctx.save();ctx.translate(cx,cy);ctx.rotate(rot);
-  const g=ctx.createRadialGradient(0,0,r*0.15,0,0,r);
-  g.addColorStop(0,'#333');g.addColorStop(0.3,'#111');g.addColorStop(0.5,'#1a1a1a');g.addColorStop(0.7,'#0f0f0f');g.addColorStop(1,'#080808');
-  ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=g;ctx.fill();
-  for(let i=0;i<8;i++){const gr=r*0.35+i*(r*0.065);ctx.beginPath();ctx.arc(0,0,gr,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,0.04)';ctx.lineWidth=0.5;ctx.stroke();}
-  const lg=ctx.createRadialGradient(0,0,0,0,0,r*0.25);lg.addColorStop(0,accent);lg.addColorStop(1,'#111');
-  ctx.beginPath();ctx.arc(0,0,r*0.25,0,Math.PI*2);ctx.fillStyle=lg;ctx.fill();
-  ctx.beginPath();ctx.arc(0,0,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
-  ctx.beginPath();ctx.moveTo(r*0.3,0);ctx.lineTo(r*0.85,0);ctx.strokeStyle=playing?accent:'rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.stroke();
-  ctx.restore();
-  if(playing){ctx.beginPath();ctx.arc(cx,cy,r+2,0,Math.PI*2);ctx.strokeStyle=accent;ctx.lineWidth=1.5;ctx.globalAlpha=0.3+Math.sin(Date.now()/300)*0.15;ctx.stroke();ctx.globalAlpha=1;}
-}
+
 
 // === BPM Detection (onset energy flux + autocorrelation) ===
 function detectBPM(buffer) {
@@ -815,15 +801,10 @@ $('recordBtn')?.addEventListener('click',()=>{
 });
 
 // === Animation ===
-let rotA=0,rotB=0;
-const vA=$('vinylA'),vB=$('vinylB');
-if(vA){vA.width=168;vA.height=168;}if(vB){vB.width=168;vB.height=168;}
+
 
 function animate(){
-  if(deck.A.playing)rotA+=0.02*deck.A.pitch;
-  if(deck.B.playing)rotB+=0.02*deck.B.pitch;
-  drawVinyl(vA,deck.A.playing,rotA,'#00e5ff');
-  drawVinyl(vB,deck.B.playing,rotB,'#ff00e5');
+
   drawWaveform($('waveA'),'A','#00e5ff');
   drawWaveform($('waveB'),'B','#ff00e5');
   $('timeA').textContent=fmtTime(getPos('A'));
@@ -846,7 +827,7 @@ function animate(){
   });
   requestAnimationFrame(animate);
 }
-drawVinyl(vA,false,0,'#00e5ff');drawVinyl(vB,false,0,'#ff00e5');
+
 drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
 animate();
 
