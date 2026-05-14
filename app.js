@@ -262,11 +262,32 @@ function detectBPM(buffer) {
   while (bpm < 70) bpm *= 2;
   bpm = Math.round(bpm * 10) / 10; // 1 decimal precision
 
-  // 5. Find first beat position (first strong onset)
-  const beatInterval = 60 / bpm; // seconds
-  const firstBeat = onsets.length > 0 ? (onsets[0] * hopSize / sr) : 0;
+  // 5. Find first beat position (best candidate matching the BPM grid)
+  const beatInterval = 60 / bpm;
+  let bestFirstBeat = onsets.length > 0 ? (onsets[0] * hopSize / sr) : 0;
+  let maxScore = -1;
 
-  return { bpm, firstBeat };
+  // Check first ~20 onsets to see which one aligns best with the rest of the file
+  const candidates = onsets.slice(0, 20);
+  candidates.forEach(o => {
+    const candidateTime = o * hopSize / sr;
+    let score = 0;
+    // Count how many other onsets fall on the grid defined by this candidate
+    for (let i = 0; i < Math.min(onsets.length, 100); i++) {
+      const otherTime = onsets[i] * hopSize / sr;
+      const diff = Math.abs(otherTime - candidateTime);
+      const distToGrid = diff % beatInterval;
+      if (distToGrid < 0.04 || distToGrid > beatInterval - 0.04) {
+        score++;
+      }
+    }
+    if (score > maxScore) {
+      maxScore = score;
+      bestFirstBeat = candidateTime;
+    }
+  });
+
+  return { bpm, firstBeat: bestFirstBeat };
 }
 
 // === Beat Grid ===
@@ -340,60 +361,54 @@ function resetBothPitch() {
 // Sync: reset both first, then follower adjusts to master's BASE BPM
 function performSync(follower) {
   const master = follower === 'A' ? 'B' : 'A';
-  if (!players[master].buffer?.loaded || !players[follower].buffer?.loaded) {
+  const sM = deck[master], sF = deck[follower];
+  const pM = players[master], pF = players[follower];
+
+  if (!pM.buffer?.loaded || !pF.buffer?.loaded) {
     alert('Загрузите оба трека'); return;
   }
+  if (sM.bpm <= 0 || sF.bpm <= 0) {
+    alert('BPM не определен'); return;
+  }
 
-  // Step 1: Reset both decks to base pitch
-  resetPitch('A');
-  resetPitch('B');
-
-  const bpmM = deck[master].bpm, bpmF = deck[follower].bpm;
   const stEl = $('syncStatus');
 
-  if (bpmM > 0 && bpmF > 0) {
-    // Step 2: Apply sync — follower changes BPM to match master
-    const newPitch = Math.max(0.5, Math.min(1.5, bpmM / bpmF));
-    deck[follower].pitch = newPitch;
-    players[follower].playbackRate = newPitch;
-    updatePitchUI(follower, newPitch);
+  // 1. Calculate Master's current effective BPM (BPM * current pitch)
+  const masterEffectiveBPM = sM.bpm * sM.pitch;
+  
+  // 2. Set Follower's pitch to reach the same effective BPM
+  const newPitch = masterEffectiveBPM / sF.bpm;
+  sF.pitch = newPitch;
+  pF.playbackRate = newPitch;
+  updatePitchUI(follower, newPitch);
 
-    // Phase alignment (Beat Sync)
-    const phaseM = deck[master].playing ? getBeatPhase(master) : 0;
-    const phaseF = getBeatPhase(follower);
-    let phaseDiff = phaseM - phaseF;
-    
-    // Find shortest phase jump
-    if (phaseDiff > 0.5) phaseDiff -= 1;
-    if (phaseDiff < -0.5) phaseDiff += 1;
-    
-    const intervalF = 60 / bpmF;
-    const target = getPos(follower) + phaseDiff * intervalF;
-    
-    const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
-    deck[follower].offset = clamped;
-    if (deck[follower].playing) {
-      players[follower].stop();
-      players[follower].playbackRate = newPitch;
-      players[follower].start(undefined, clamped);
-      deck[follower].startTime = Tone.now();
-    }
-    
-    syncFollower = follower;
-    const pct = Math.round((newPitch - 1) * 100);
-    stEl.textContent = '✅ ' + follower + '→' + master + ' | ' + bpmF + '→' + bpmM +
-      ' BPM | pitch ' + (pct >= 0 ? '+' : '') + pct + '%';
-    $('syncABtn')?.classList.toggle('synced', follower === 'A');
-    $('syncBBtn')?.classList.toggle('synced', follower === 'B');
-  } else {
-    if (deck.A.playing && deck.B.playing) {
-      seekDeck(follower, getPos(master) / getDur(master));
-      stEl.textContent = '✅ Phase sync (BPM не определён)';
-    } else {
-      alert('Оба трека должны играть');
-    }
+  // 3. Phase Alignment (Beat Match)
+  const phaseM = sM.playing ? getBeatPhase(master) : 0;
+  const phaseF = getBeatPhase(follower);
+  
+  let phaseDiff = phaseM - phaseF;
+  if (phaseDiff > 0.5) phaseDiff -= 1;
+  if (phaseDiff < -0.5) phaseDiff += 1;
+
+  const intervalF = 60 / sF.bpm;
+  const jumpAmount = phaseDiff * intervalF;
+  const curPos = getPos(follower);
+  const target = curPos + jumpAmount;
+  
+  const clamped = Math.max(0, Math.min(target, getDur(follower) - 0.1));
+  sF.offset = clamped;
+
+  if (sF.playing) {
+    pF.stop();
+    pF.playbackRate = newPitch;
+    pF.start(undefined, clamped);
+    sF.startTime = Tone.now();
   }
-  setTimeout(() => { if (!syncLocked) stEl.textContent = ''; }, 4000);
+
+  // Visual feedback
+  syncFollower = follower;
+  stEl.textContent = `✅ Sync: ${follower} -> ${master} (${masterEffectiveBPM.toFixed(1)} BPM)`;
+  setTimeout(() => { if(stEl.textContent.includes('Sync')) stEl.textContent = ''; }, 3000);
 }
 
 // Continuous sync: per-frame phase correction
