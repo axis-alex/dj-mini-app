@@ -21,9 +21,10 @@ let isRecording=false,mediaRecorder,audioChunks=[];
 const activeFx={A:{},B:{}};
 const $=id=>document.getElementById(id);
 
-// API base URL — set to your server URL when hosting frontend separately (e.g. GitHub Pages)
-// Leave empty when serving from the same server.js
-const API_BASE = '';
+// API base URL — auto-detected from server injection or configured manually
+// When served from server.js, window.__API_BASE is injected automatically
+// When on GitHub Pages, set this to your server's public URL (e.g. https://xxx.loca.lt)
+const API_BASE = window.__API_BASE || '';
 
 function fmtTime(s){if(!s||!isFinite(s))return'0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}
 function getDur(d){const p=players[d];return p.buffer?.loaded?p.buffer.duration:0;}
@@ -662,8 +663,15 @@ function openTrackBrowser(deck) {
             });
         })
         .catch(err => {
-            console.error(err);
-            trackList.innerHTML = '<div class="track-empty">Ошибка загрузки треков. Убедитесь, что вы открыли приложение через Telegram.</div>';
+            console.error('Track browser error:', err);
+            const isGitHubPages = location.hostname.includes('github.io');
+            if (isGitHubPages && !API_BASE) {
+                trackList.innerHTML = '<div class="track-empty">⚠️ Сервер не настроен.<br><br>Приложение работает на GitHub Pages, но API-сервер недоступен.<br><br>Запустите <code>node server.js</code> и откройте приложение через URL сервера, а не через GitHub Pages.</div>';
+            } else if (!initData) {
+                trackList.innerHTML = '<div class="track-empty">⚠️ Откройте приложение через Telegram-бота, а не напрямую в браузере.</div>';
+            } else {
+                trackList.innerHTML = `<div class="track-empty">❌ Сервер недоступен (${API_BASE || location.origin}).<br><br>Убедитесь, что <code>node server.js</code> запущен.</div>`;
+            }
         });
 }
 

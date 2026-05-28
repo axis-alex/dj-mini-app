@@ -348,7 +348,17 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
 });
 
 // --- Serve Static Files Safely ---
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+const fs = require('fs');
+
+app.get('/', (req, res) => {
+    // Inject API base URL into index.html so the frontend knows where the API is
+    const htmlPath = path.join(__dirname, 'index.html');
+    let html = fs.readFileSync(htmlPath, 'utf8');
+    // Inject a script tag before the first <script> to set window.__API_BASE
+    const apiBaseScript = `<script>window.__API_BASE = '';</script>\n`;
+    html = html.replace('<script src="https://telegram.org/js/telegram-web-app.js">', apiBaseScript + '<script src="https://telegram.org/js/telegram-web-app.js">');
+    res.type('html').send(html);
+});
 app.get('/app.js', (req, res) => res.sendFile(path.join(__dirname, 'app.js')));
 app.get('/styles.css', (req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
 
