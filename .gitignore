@@ -14,7 +14,13 @@ node_modules/
 # Build artifacts
 *.log
 
+# Secrets & Data
+.env
+*.sqlite
+
 # Legacy / temp
 app
 index.html.txt
 everything-code-main/
+push_to_github.sh
+

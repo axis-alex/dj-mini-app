@@ -5,7 +5,6 @@ const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
 const db = require('./database');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args)); // Dynamic import for node-fetch if needed, or we can use native fetch
 
 const app = express();
 app.use(cors());
@@ -17,19 +16,174 @@ if (!BOT_TOKEN) {
     process.exit(1);
 }
 
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://axis-alex.github.io/dj-mini-app/';
 const bot = new Telegraf(BOT_TOKEN);
 
-// --- Telegram Bot Logic ---
-bot.start((ctx) => {
-    ctx.reply('Привет! Отправь мне любой аудиофайл (MP3, WAV) или голосовое сообщение, и я добавлю его в твою библиотеку Katz Studio Pro.', {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '🎧 Открыть Mixer', web_app: { url: process.env.WEBAPP_URL || 'https://axis-alex.github.io/dj-mini-app/' } }]
-            ]
-        }
+// --- Helpers ---
+
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma'];
+const AUDIO_MIMES = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/x-m4a'];
+
+function isAudioFile(fileName, mimeType) {
+    if (mimeType && AUDIO_MIMES.some(m => mimeType.startsWith(m.split('/')[0]) && mimeType.includes('audio'))) return true;
+    if (fileName) {
+        const ext = path.extname(fileName).toLowerCase();
+        return AUDIO_EXTENSIONS.includes(ext);
+    }
+    return false;
+}
+
+function getTrackCount(userId) {
+    return new Promise((resolve, reject) => {
+        db.get('SELECT COUNT(*) as count FROM tracks WHERE user_id = ?', [userId], (err, row) => {
+            if (err) reject(err);
+            else resolve(row?.count || 0);
+        });
     });
+}
+
+function saveTrack(userId, fileId, fileName, title, performer, duration, mimeType) {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `INSERT INTO tracks (user_id, file_id, file_name, title, performer, duration, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [userId, fileId, fileName, title, performer, duration, mimeType],
+            function (err) {
+                if (err) reject(err);
+                else resolve(this.lastID);
+            }
+        );
+    });
+}
+
+function getUserTracks(userId) {
+    return new Promise((resolve, reject) => {
+        db.all('SELECT * FROM tracks WHERE user_id = ? ORDER BY created_at DESC', [userId], (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+        });
+    });
+}
+
+function deleteTrack(trackId, userId) {
+    return new Promise((resolve, reject) => {
+        db.run('DELETE FROM tracks WHERE id = ? AND user_id = ?', [trackId, userId], function (err) {
+            if (err) reject(err);
+            else resolve(this.changes);
+        });
+    });
+}
+
+function fmtDuration(sec) {
+    if (!sec || sec <= 0) return '';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return ` (${m}:${s < 10 ? '0' : ''}${s})`;
+}
+
+// --- Telegram Bot Logic ---
+
+bot.start((ctx) => {
+    ctx.reply(
+        '🎧 *Katz Studio Pro*\n\n' +
+        'Отправьте мне аудиофайлы (MP3, WAV, FLAC и др.), и я добавлю их в вашу библиотеку.\n\n' +
+        '📋 *Команды:*\n' +
+        '/list — показать библиотеку треков\n' +
+        '/delete — удалить трек\n' +
+        '/help — помощь',
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
+                ]
+            }
+        }
+    );
 });
 
+bot.help((ctx) => {
+    ctx.reply(
+        '🎧 *Katz Studio Pro — DJ Mixer*\n\n' +
+        '📤 *Как добавить треки:*\n' +
+        '• Отправьте аудиофайл (MP3, WAV, FLAC, M4A, OGG)\n' +
+        '• Перешлите голосовое сообщение\n' +
+        '• Прикрепите файл как документ\n\n' +
+        '📋 *Команды:*\n' +
+        '/list — показать библиотеку треков\n' +
+        '/delete — удалить трек по номеру\n' +
+        '/start — главное меню\n\n' +
+        '🎛 *В миксере:*\n' +
+        '• Нажмите «💬 Telegram» на деке, чтобы загрузить трек из библиотеки\n' +
+        '• Pinch-to-zoom на графике для увеличения',
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// --- /list command ---
+bot.command('list', async (ctx) => {
+    const userId = ctx.from.id;
+    try {
+        const tracks = await getUserTracks(userId);
+        if (tracks.length === 0) {
+            return ctx.reply('📭 Библиотека пуста. Отправьте мне аудиофайлы!');
+        }
+        let msg = `📚 *Ваша библиотека* (${tracks.length} треков):\n\n`;
+        tracks.forEach((t, i) => {
+            const dur = fmtDuration(t.duration);
+            msg += `${i + 1}. ${t.performer || '?'} — ${t.title || t.file_name}${dur}\n`;
+        });
+        msg += '\n_Для удаления: /delete <номер>_';
+        ctx.reply(msg, { parse_mode: 'Markdown' });
+    } catch (err) {
+        console.error(err);
+        ctx.reply('❌ Ошибка загрузки библиотеки.');
+    }
+});
+
+// --- /delete command ---
+bot.command('delete', async (ctx) => {
+    const userId = ctx.from.id;
+    const args = ctx.message.text.split(/\s+/).slice(1);
+
+    if (args.length === 0) {
+        // Show list with delete hints
+        const tracks = await getUserTracks(userId);
+        if (tracks.length === 0) {
+            return ctx.reply('📭 Библиотека пуста.');
+        }
+        let msg = '🗑 *Выберите трек для удаления:*\n\n';
+        tracks.forEach((t, i) => {
+            msg += `${i + 1}. ${t.performer || '?'} — ${t.title || t.file_name}\n`;
+        });
+        msg += '\n_Введите /delete <номер>, например: /delete 1_';
+        return ctx.reply(msg, { parse_mode: 'Markdown' });
+    }
+
+    const index = parseInt(args[0], 10);
+    if (isNaN(index) || index < 1) {
+        return ctx.reply('❌ Укажите корректный номер трека. Пример: /delete 1');
+    }
+
+    try {
+        const tracks = await getUserTracks(userId);
+        if (index > tracks.length) {
+            return ctx.reply(`❌ Нет трека с номером ${index}. Всего треков: ${tracks.length}`);
+        }
+        const track = tracks[index - 1];
+        const deleted = await deleteTrack(track.id, userId);
+        if (deleted > 0) {
+            const remaining = await getTrackCount(userId);
+            ctx.reply(`🗑 Удалён: "${track.title || track.file_name}"\n📚 Осталось треков: ${remaining}`);
+        } else {
+            ctx.reply('❌ Не удалось удалить трек.');
+        }
+    } catch (err) {
+        console.error(err);
+        ctx.reply('❌ Ошибка при удалении.');
+    }
+});
+
+// --- Audio message handler ---
 bot.on(['audio', 'voice'], async (ctx) => {
     const userId = ctx.from.id;
     let fileId, fileName, title, performer, duration, mimeType;
@@ -47,23 +201,67 @@ bot.on(['audio', 'voice'], async (ctx) => {
         fileId = voice.file_id;
         fileName = 'Voice Message';
         title = `Voice Message (${new Date().toLocaleString()})`;
-        performer = 'You';
+        performer = ctx.from.first_name || 'You';
         duration = voice.duration || 0;
         mimeType = voice.mime_type;
     }
 
-    // Save to DB
-    db.run(
-        `INSERT INTO tracks (user_id, file_id, file_name, title, performer, duration, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [userId, fileId, fileName, title, performer, duration, mimeType],
-        function (err) {
-            if (err) {
-                console.error(err);
-                return ctx.reply('Произошла ошибка при сохранении трека.');
+    try {
+        await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
+        const count = await getTrackCount(userId);
+        ctx.reply(
+            `✅ *Трек сохранён!*\n🎵 ${performer} — ${title}\n📚 Всего в библиотеке: ${count}`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
+                    ]
+                }
             }
-            ctx.reply(`✅ Трек "${title}" сохранён! Откройте приложение, чтобы сыграть его.`);
-        }
-    );
+        );
+    } catch (err) {
+        console.error(err);
+        ctx.reply('❌ Ошибка при сохранении трека.');
+    }
+});
+
+// --- Document handler (MP3/WAV sent as files) ---
+bot.on('document', async (ctx) => {
+    const doc = ctx.message.document;
+    if (!doc) return;
+
+    // Check if this document is an audio file
+    if (!isAudioFile(doc.file_name, doc.mime_type)) {
+        return ctx.reply('⚠️ Отправьте аудиофайл (MP3, WAV, FLAC, M4A, OGG и др.).');
+    }
+
+    const userId = ctx.from.id;
+    const fileId = doc.file_id;
+    const fileName = doc.file_name || 'Unknown Track';
+    const title = path.parse(fileName).name; // filename without extension
+    const performer = ctx.from.first_name || 'Unknown Artist';
+    const mimeType = doc.mime_type || 'audio/mpeg';
+    const duration = 0; // Documents don't have duration metadata
+
+    try {
+        await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
+        const count = await getTrackCount(userId);
+        ctx.reply(
+            `✅ *Файл сохранён!*\n🎵 ${title}\n📁 ${fileName}\n📚 Всего в библиотеке: ${count}`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
+                    ]
+                }
+            }
+        );
+    } catch (err) {
+        console.error(err);
+        ctx.reply('❌ Ошибка при сохранении файла.');
+    }
 });
 
 // Start bot
@@ -124,7 +322,6 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
 
     const fileId = req.params.fileId;
     
-    // Optional: check if user owns this track
     db.get(`SELECT * FROM tracks WHERE file_id = ? AND user_id = ?`, [fileId, user.id], async (err, row) => {
         if (err || !row) {
             return res.status(404).send('Track not found or access denied');
@@ -135,7 +332,6 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
             const fileLink = await bot.telegram.getFileLink(fileId);
             
             // Proxy the file to avoid exposing bot token and avoid CORS issues
-            // Use native fetch (Node 18+)
             const response = await fetch(fileLink.href);
             
             if (!response.ok) {
@@ -143,10 +339,6 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
             }
 
             res.set('Content-Type', row.mime_type || 'audio/mpeg');
-            // If the size is known, we could set Content-Length, but streaming works without it
-            // Telegram supports Range requests, so piping directly usually works, 
-            // but for seeking Tone.js might need to download the whole file anyway.
-            
             response.body.pipe(res);
         } catch (error) {
             console.error('Error fetching file:', error);
@@ -159,11 +351,11 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/app.js', (req, res) => res.sendFile(path.join(__dirname, 'app.js')));
 app.get('/styles.css', (req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
-// Let them fetch any image or other asset if they add it later, but not dotfiles or .js/.sqlite
+
 app.use(express.static(__dirname, {
     index: false,
-    setHeaders: (res, path, stat) => {
-        if (path.endsWith('.sqlite') || path.endsWith('.env') || path.endsWith('.js') || path.endsWith('.json') || path.endsWith('.md')) {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.sqlite') || filePath.endsWith('.env') || filePath.endsWith('.js') || filePath.endsWith('.json') || filePath.endsWith('.md')) {
             res.status(403).end();
         }
     }

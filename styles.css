@@ -14,6 +14,7 @@
   --knob-track: #1a1a2e;
   --glow-cyan: 0 0 20px rgba(0, 229, 255, 0.3);
   --glow-magenta: 0 0 20px rgba(255, 0, 229, 0.3);
+  --border-color: rgba(80, 80, 160, 0.25);
 }
 
 * {
@@ -85,10 +86,7 @@ body {
 }
 .deck-b .deck-status { background: rgba(255,0,229,0.15); color: var(--accent-magenta); }
 
-/* Visual row: vinyl + waveform */
-.visual-row {
-  display: flex; gap: 10px; margin-bottom: 10px; align-items: center;
-}
+
 
 .stacked-waveforms {
   display: flex; flex-direction: column; gap: 2px;
@@ -345,8 +343,7 @@ footer {
   margin-top: 16px; letter-spacing: 1px;
 }
 
-/* Vinyl spin animation */
-@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 
 /* Hidden file inputs */
 input[type="file"] {

@@ -21,6 +21,10 @@ let isRecording=false,mediaRecorder,audioChunks=[];
 const activeFx={A:{},B:{}};
 const $=id=>document.getElementById(id);
 
+// API base URL — set to your server URL when hosting frontend separately (e.g. GitHub Pages)
+// Leave empty when serving from the same server.js
+const API_BASE = '';
+
 function fmtTime(s){if(!s||!isFinite(s))return'0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}
 function getDur(d){const p=players[d];return p.buffer?.loaded?p.buffer.duration:0;}
 function getPos(d){const s=deck[d];if(!s.playing)return Math.min(s.offset,getDur(d));const el=(Tone.now()-s.startTime)*s.pitch;return Math.min(s.offset+el,getDur(d));}
@@ -174,8 +178,6 @@ function drawWaveform(canvas,d,accent){
   ctx.beginPath();ctx.moveTo(0,midY);ctx.lineTo(w,midY);ctx.stroke();
 }
 
-// === Vinyl ===
-
 
 // === BPM Detection (onset energy flux + autocorrelation) ===
 function detectBPM(buffer) {
@@ -290,21 +292,6 @@ function detectBPM(buffer) {
   return { bpm, firstBeat: bestFirstBeat };
 }
 
-// === Beat Grid ===
-function buildBeatGrid(bpm, firstBeat, duration) {
-  if (bpm <= 0 || duration <= 0) return [];
-  const interval = 60 / bpm;
-  const grid = [];
-  // Align grid to start from firstBeat, extend backwards if needed
-  let pos = firstBeat;
-  while (pos > interval) pos -= interval;
-  while (pos < duration) {
-    if (pos >= 0) grid.push(pos);
-    pos += interval;
-  }
-  return grid;
-}
-
 // Get the beat phase: position within the current beat (0.0 - 1.0)
 function getBeatPhase(d) {
   const s = deck[d];
@@ -315,16 +302,6 @@ function getBeatPhase(d) {
   let phase = ((pos - s.firstBeat) % interval) / interval;
   if (phase < 0) phase += 1;
   return phase;
-}
-
-// Get nearest beat position to current playback
-function getNearestBeat(d) {
-  const s = deck[d];
-  if (s.bpm <= 0) return getPos(d);
-  const pos = getPos(d);
-  const interval = 60 / s.bpm;
-  const beatNum = Math.round((pos - s.firstBeat) / interval);
-  return s.firstBeat + beatNum * interval;
 }
 
 // === Sync State ===
@@ -358,7 +335,7 @@ function resetBothPitch() {
   setTimeout(() => { $('syncStatus').textContent = ''; }, 2000);
 }
 
-// Sync: reset both first, then follower adjusts to master's BASE BPM
+// Sync: follower adjusts pitch to match master's effective BPM and aligns phase
 function performSync(follower) {
   const master = follower === 'A' ? 'B' : 'A';
   const sM = deck[master], sF = deck[follower];
@@ -655,7 +632,7 @@ function openTrackBrowser(deck) {
     trackList.innerHTML = '<div class="track-loading">Загрузка треков...</div>';
     
     const initData = window.Telegram?.WebApp?.initData || '';
-    fetch(`/api/tracks?initData=${encodeURIComponent(initData)}`)
+    fetch(`${API_BASE}/api/tracks?initData=${encodeURIComponent(initData)}`)
         .then(res => {
             if (!res.ok) throw new Error('HTTP ' + res.status);
             return res.json();
@@ -677,7 +654,7 @@ function openTrackBrowser(deck) {
                     </div>
                 `;
                 div.addEventListener('click', () => {
-                    const streamUrl = `/api/tracks/${track.file_id}/stream?initData=${encodeURIComponent(initData)}`;
+                    const streamUrl = `${API_BASE}/api/tracks/${track.file_id}/stream?initData=${encodeURIComponent(initData)}`;
                     loadDeck(currentTargetDeck, streamUrl);
                     trackModal.classList.remove('active');
                 });
@@ -816,8 +793,6 @@ $('recordBtn')?.addEventListener('click',()=>{
 });
 
 // === Animation ===
-
-
 function animate(){
 
   drawWaveform($('waveA'),'A','#00e5ff');
