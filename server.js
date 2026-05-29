@@ -4,6 +4,7 @@ const { Telegraf } = require('telegraf');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const db = require('./database');
 
 const app = express();
@@ -12,20 +13,21 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-    console.error("BOT_TOKEN is not defined in .env");
+    console.error("BOT_TOKEN is not defined. Set it in Environment Variables.");
     process.exit(1);
 }
 
+// WEBAPP_URL — the public URL where this server is deployed
+// On Render: https://your-service-name.onrender.com
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://axis-alex.github.io/dj-mini-app/';
 const bot = new Telegraf(BOT_TOKEN);
 
 // --- Helpers ---
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma'];
-const AUDIO_MIMES = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/x-m4a'];
 
 function isAudioFile(fileName, mimeType) {
-    if (mimeType && AUDIO_MIMES.some(m => mimeType.startsWith(m.split('/')[0]) && mimeType.includes('audio'))) return true;
+    if (mimeType && mimeType.startsWith('audio/')) return true;
     if (fileName) {
         const ext = path.extname(fileName).toLowerCase();
         return AUDIO_EXTENSIONS.includes(ext);
@@ -80,7 +82,7 @@ function fmtDuration(sec) {
     return ` (${m}:${s < 10 ? '0' : ''}${s})`;
 }
 
-// --- Telegram Bot Logic ---
+// --- Telegram Bot Commands ---
 
 bot.start((ctx) => {
     ctx.reply(
@@ -119,7 +121,6 @@ bot.help((ctx) => {
     );
 });
 
-// --- /list command ---
 bot.command('list', async (ctx) => {
     const userId = ctx.from.id;
     try {
@@ -140,13 +141,11 @@ bot.command('list', async (ctx) => {
     }
 });
 
-// --- /delete command ---
 bot.command('delete', async (ctx) => {
     const userId = ctx.from.id;
     const args = ctx.message.text.split(/\s+/).slice(1);
 
     if (args.length === 0) {
-        // Show list with delete hints
         const tracks = await getUserTracks(userId);
         if (tracks.length === 0) {
             return ctx.reply('📭 Библиотека пуста.');
@@ -231,7 +230,6 @@ bot.on('document', async (ctx) => {
     const doc = ctx.message.document;
     if (!doc) return;
 
-    // Check if this document is an audio file
     if (!isAudioFile(doc.file_name, doc.mime_type)) {
         return ctx.reply('⚠️ Отправьте аудиофайл (MP3, WAV, FLAC, M4A, OGG и др.).');
     }
@@ -239,10 +237,10 @@ bot.on('document', async (ctx) => {
     const userId = ctx.from.id;
     const fileId = doc.file_id;
     const fileName = doc.file_name || 'Unknown Track';
-    const title = path.parse(fileName).name; // filename without extension
+    const title = path.parse(fileName).name;
     const performer = ctx.from.first_name || 'Unknown Artist';
     const mimeType = doc.mime_type || 'audio/mpeg';
-    const duration = 0; // Documents don't have duration metadata
+    const duration = 0;
 
     try {
         await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
@@ -264,8 +262,12 @@ bot.on('document', async (ctx) => {
     }
 });
 
-// Start bot
-bot.launch();
+// --- Start bot (polling mode) ---
+bot.launch().then(() => {
+    console.log('🤖 Telegram bot started');
+}).catch(err => {
+    console.error('Bot launch error:', err.message);
+});
 
 // --- Validation helper ---
 function validateInitData(initData) {
@@ -293,6 +295,11 @@ function validateInitData(initData) {
 
 // --- API Endpoints ---
 
+// Health check (useful for Render)
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', version: '4.0.0', uptime: process.uptime() });
+});
+
 // Get user's tracks
 app.get('/api/tracks', (req, res) => {
     const initData = req.query.initData || req.headers['authorization'];
@@ -311,7 +318,7 @@ app.get('/api/tracks', (req, res) => {
     });
 });
 
-// Proxy audio stream
+// Proxy audio stream from Telegram
 app.get('/api/tracks/:fileId/stream', async (req, res) => {
     const initData = req.query.initData;
     const user = validateInitData(initData);
@@ -328,10 +335,7 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
         }
 
         try {
-            // Get file link from Telegram
             const fileLink = await bot.telegram.getFileLink(fileId);
-            
-            // Proxy the file to avoid exposing bot token and avoid CORS issues
             const response = await fetch(fileLink.href);
             
             if (!response.ok) {
@@ -347,14 +351,11 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
     });
 });
 
-// --- Serve Static Files Safely ---
-const fs = require('fs');
-
+// --- Serve Frontend ---
 app.get('/', (req, res) => {
-    // Inject API base URL into index.html so the frontend knows where the API is
     const htmlPath = path.join(__dirname, 'index.html');
     let html = fs.readFileSync(htmlPath, 'utf8');
-    // Inject a script tag before the first <script> to set window.__API_BASE
+    // Inject API base (empty = same origin, which is correct on Render)
     const apiBaseScript = `<script>window.__API_BASE = '';</script>\n`;
     html = html.replace('<script src="https://telegram.org/js/telegram-web-app.js">', apiBaseScript + '<script src="https://telegram.org/js/telegram-web-app.js">');
     res.type('html').send(html);
@@ -362,20 +363,25 @@ app.get('/', (req, res) => {
 app.get('/app.js', (req, res) => res.sendFile(path.join(__dirname, 'app.js')));
 app.get('/styles.css', (req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
 
+// Static assets (images etc.) but block sensitive files
 app.use(express.static(__dirname, {
     index: false,
     setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.sqlite') || filePath.endsWith('.env') || filePath.endsWith('.js') || filePath.endsWith('.json') || filePath.endsWith('.md')) {
+        if (filePath.endsWith('.sqlite') || filePath.endsWith('.env') || 
+            filePath.endsWith('.json') || filePath.endsWith('.md') ||
+            filePath.includes('node_modules') || filePath.includes('.git')) {
             res.status(403).end();
         }
     }
 }));
 
+// --- Start Server ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌐 WEBAPP_URL: ${WEBAPP_URL}`);
 });
 
-// Enable graceful stop
+// Graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

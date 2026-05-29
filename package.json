@@ -1,13 +1,16 @@
 {
   "name": "katz-studio-pro",
   "version": "4.0.0",
-  "description": "Professional DJ mixer running as a Telegram Mini App. Two-deck system with real-time audio processing, beat sync, and waveform visualization.",
+  "description": "Professional DJ mixer — Telegram Mini App with bot integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"No tests specified\" && exit 0"
+    "test": "echo \"No tests\" && exit 0"
   },
-  "keywords": ["telegram", "mini-app", "dj", "mixer", "audio"],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["telegram", "mini-app", "dj", "mixer"],
   "author": "axis-alex",
   "license": "MIT",
   "dependencies": {
