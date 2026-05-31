@@ -47,11 +47,11 @@ function getTrackCount(userId) {
 function saveTrack(userId, fileId, fileName, title, performer, duration, mimeType) {
     return new Promise((resolve, reject) => {
         db.run(
-            `INSERT INTO tracks (user_id, file_id, file_name, title, performer, duration, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR IGNORE INTO tracks (user_id, file_id, file_name, title, performer, duration, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [userId, fileId, fileName, title, performer, duration, mimeType],
             function (err) {
                 if (err) reject(err);
-                else resolve(this.lastID);
+                else resolve({ id: this.lastID, isNew: this.changes > 0 });
             }
         );
     });
@@ -91,6 +91,7 @@ bot.start((ctx) => {
         '📋 *Команды:*\n' +
         '/list — показать библиотеку треков\n' +
         '/delete — удалить трек\n' +
+        '/sync — восстановить библиотеку\n' +
         '/help — помощь',
         {
             parse_mode: 'Markdown',
@@ -113,10 +114,9 @@ bot.help((ctx) => {
         '📋 *Команды:*\n' +
         '/list — показать библиотеку треков\n' +
         '/delete — удалить трек по номеру\n' +
+        '/sync — восстановить библиотеку из чата\n' +
         '/start — главное меню\n\n' +
-        '🎛 *В миксере:*\n' +
-        '• Нажмите «💬 Telegram» на деке, чтобы загрузить трек из библиотеки\n' +
-        '• Pinch-to-zoom на графике для увеличения',
+        '🔄 *Синхронизация:* Если библиотека пуста — нажмите «Синхронизировать» в миксере или используйте /sync',
         { parse_mode: 'Markdown' }
     );
 });
@@ -182,6 +182,22 @@ bot.command('delete', async (ctx) => {
     }
 });
 
+// --- /sync command ---
+bot.command('sync', async (ctx) => {
+    const userId = ctx.from.id;
+    const count = await getTrackCount(userId);
+    ctx.reply(
+        '🔄 *Синхронизация библиотеки*\n\n' +
+        `Сейчас в базе: ${count} треков.\n\n` +
+        'Чтобы восстановить библиотеку, просто *перешлите* мне ваши аудиофайлы из этого чата:\n\n' +
+        '1. Прокрутите чат вверх\n' +
+        '2. Нажмите на аудиофайл → *Переслать*\n' +
+        '3. Выберите этого бота\n\n' +
+        '💡 Можно выбрать несколько файлов сразу! Дубликаты будут пропущены автоматически.',
+        { parse_mode: 'Markdown' }
+    );
+});
+
 // --- Audio message handler ---
 bot.on(['audio', 'voice'], async (ctx) => {
     const userId = ctx.from.id;
@@ -206,19 +222,23 @@ bot.on(['audio', 'voice'], async (ctx) => {
     }
 
     try {
-        await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
+        const result = await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
         const count = await getTrackCount(userId);
-        ctx.reply(
-            `✅ *Трек сохранён!*\n🎵 ${performer} — ${title}\n📚 Всего в библиотеке: ${count}`,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
-                    ]
+        if (result.isNew) {
+            ctx.reply(
+                `✅ *Трек сохранён!*\n🎵 ${performer} — ${title}\n📚 Всего в библиотеке: ${count}`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
+                        ]
+                    }
                 }
-            }
-        );
+            );
+        } else {
+            ctx.reply(`⏩ Трек уже в библиотеке (${count} шт.)`);
+        }
     } catch (err) {
         console.error(err);
         ctx.reply('❌ Ошибка при сохранении трека.');
@@ -243,19 +263,23 @@ bot.on('document', async (ctx) => {
     const duration = 0;
 
     try {
-        await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
+        const result = await saveTrack(userId, fileId, fileName, title, performer, duration, mimeType);
         const count = await getTrackCount(userId);
-        ctx.reply(
-            `✅ *Файл сохранён!*\n🎵 ${title}\n📁 ${fileName}\n📚 Всего в библиотеке: ${count}`,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
-                    ]
+        if (result.isNew) {
+            ctx.reply(
+                `✅ *Файл сохранён!*\n🎵 ${title}\n📁 ${fileName}\n📚 Всего в библиотеке: ${count}`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🎧 Открыть Mixer', web_app: { url: WEBAPP_URL } }]
+                        ]
+                    }
                 }
-            }
-        );
+            );
+        } else {
+            ctx.reply(`⏩ Файл уже в библиотеке (${count} шт.)`);
+        }
     } catch (err) {
         console.error(err);
         ctx.reply('❌ Ошибка при сохранении файла.');
@@ -297,7 +321,7 @@ function validateInitData(initData) {
 
 // Health check (useful for Render)
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', version: '4.0.0', uptime: process.uptime() });
+    res.json({ status: 'ok', version: '4.1.0', uptime: process.uptime() });
 });
 
 // Get user's tracks
@@ -316,6 +340,31 @@ app.get('/api/tracks', (req, res) => {
         }
         res.json(rows);
     });
+});
+
+// Sync: trigger bot to ask user to re-forward tracks
+app.post('/api/sync', async (req, res) => {
+    const initData = req.query.initData || req.body.initData;
+    const user = validateInitData(initData);
+    
+    if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    try {
+        const count = await getTrackCount(user.id);
+        await bot.telegram.sendMessage(user.id,
+            '🔄 *Синхронизация из миксера*\n\n' +
+            `Сейчас в базе: ${count} треков.\n\n` +
+            'Чтобы восстановить библиотеку — *перешлите* мне ваши аудиофайлы из истории чата.\n\n' +
+            '💡 Выберите несколько файлов → Переслать → этот бот. Дубликаты пропускаются автоматически.',
+            { parse_mode: 'Markdown' }
+        );
+        res.json({ status: 'ok', message: 'Sync message sent', currentTracks: count });
+    } catch (err) {
+        console.error('Sync error:', err);
+        res.status(500).json({ error: 'Failed to send sync message' });
+    }
 });
 
 // Proxy audio stream from Telegram

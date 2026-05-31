@@ -455,4 +455,66 @@ input[type="file"] {
   text-align: center;
   color: var(--text-secondary);
   font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+/* Sync button — primary (empty library) */
+.sync-btn {
+  display: inline-block;
+  padding: 12px 28px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 14px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #1a4a2e, #2a8a5a);
+  box-shadow: 0 4px 16px rgba(0, 230, 118, 0.2);
+  transition: all 0.2s ease;
+}
+.sync-btn:hover, .sync-btn:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 10px rgba(0, 230, 118, 0.35);
+}
+.sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+.sync-btn.sync-refresh {
+  background: linear-gradient(135deg, #0a3a4a, #1a6a8a);
+  box-shadow: 0 4px 16px rgba(0, 229, 255, 0.2);
+}
+
+/* Sync row — compact header inside track list */
+.track-sync-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+.track-sync-row span {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.sync-btn-small {
+  padding: 5px 12px;
+  border: 1px solid rgba(0, 230, 118, 0.3);
+  border-radius: 10px;
+  background: rgba(0, 230, 118, 0.1);
+  color: var(--accent-green);
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.sync-btn-small:hover, .sync-btn-small:active {
+  background: rgba(0, 230, 118, 0.2);
+  transform: scale(0.96);
 }

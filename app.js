@@ -627,6 +627,31 @@ let currentTargetDeck = null;
 const trackModal = $('trackBrowserModal');
 const trackList = $('trackList');
 
+function triggerSync() {
+    const initData = window.Telegram?.WebApp?.initData || '';
+    const syncBtn = $('syncLibraryBtn');
+    if (syncBtn) { syncBtn.textContent = '⏳ Отправка...'; syncBtn.disabled = true; }
+    
+    fetch(`${API_BASE}/api/sync?initData=${encodeURIComponent(initData)}`, { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+            if (syncBtn) { syncBtn.textContent = '✅ Проверьте чат с ботом'; }
+            // Show instructions inside the track list
+            trackList.innerHTML = '<div class="track-empty">' +
+                '🔄 Сообщение отправлено в чат с ботом!<br><br>' +
+                '1. Перейдите в чат с ботом<br>' +
+                '2. Перешлите ему ваши аудиофайлы<br>' +
+                '3. Вернитесь сюда и обновите список<br><br>' +
+                '<button class="sync-btn sync-refresh" id="refreshTracksBtn">🔄 Обновить список</button>' +
+                '</div>';
+            $('refreshTracksBtn')?.addEventListener('click', () => openTrackBrowser(currentTargetDeck));
+        })
+        .catch(err => {
+            console.error('Sync error:', err);
+            if (syncBtn) { syncBtn.textContent = '🔄 Синхронизировать'; syncBtn.disabled = false; }
+        });
+}
+
 function openTrackBrowser(deck) {
     currentTargetDeck = deck;
     trackModal.classList.add('active');
@@ -641,9 +666,22 @@ function openTrackBrowser(deck) {
         .then(tracks => {
             trackList.innerHTML = '';
             if (tracks.length === 0) {
-                trackList.innerHTML = '<div class="track-empty">Нет треков. Отправьте аудиофайлы боту в чат!</div>';
+                trackList.innerHTML = '<div class="track-empty">' +
+                    '📭 Библиотека пуста.<br><br>' +
+                    'Отправьте аудиофайлы боту в чат, или нажмите кнопку ниже для восстановления.' +
+                    '<br><br><button class="sync-btn" id="syncLibraryBtn">🔄 Синхронизировать библиотеку</button>' +
+                    '</div>';
+                $('syncLibraryBtn')?.addEventListener('click', triggerSync);
                 return;
             }
+            
+            // Add sync button at top of list
+            const syncRow = document.createElement('div');
+            syncRow.className = 'track-sync-row';
+            syncRow.innerHTML = `<span>${tracks.length} треков</span><button class="sync-btn-small" id="syncLibraryBtn">🔄 Синхр.</button>`;
+            trackList.appendChild(syncRow);
+            syncRow.querySelector('#syncLibraryBtn')?.addEventListener('click', triggerSync);
+
             tracks.forEach(track => {
                 const div = document.createElement('div');
                 div.className = 'track-item';
@@ -666,7 +704,7 @@ function openTrackBrowser(deck) {
             console.error('Track browser error:', err);
             const isGitHubPages = location.hostname.includes('github.io');
             if (isGitHubPages && !API_BASE) {
-                trackList.innerHTML = '<div class="track-empty">⚠️ Сервер не настроен.<br><br>Приложение работает на GitHub Pages, но API-сервер недоступен.<br><br>Запустите <code>node server.js</code> и откройте приложение через URL сервера, а не через GitHub Pages.</div>';
+                trackList.innerHTML = '<div class="track-empty">⚠️ Сервер не настроен.<br><br>Приложение работает на GitHub Pages, но API-сервер недоступен.<br><br>Запустите <code>node server.js</code> и откройте приложение через URL сервера.</div>';
             } else if (!initData) {
                 trackList.innerHTML = '<div class="track-empty">⚠️ Откройте приложение через Telegram-бота, а не напрямую в браузере.</div>';
             } else {

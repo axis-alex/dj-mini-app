@@ -16,7 +16,8 @@ const db = new sqlite3.Database(dbPath, (err) => {
             performer TEXT,
             duration INTEGER,
             mime_type TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, file_id)
         )`);
     }
 });
