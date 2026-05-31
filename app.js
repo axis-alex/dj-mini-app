@@ -430,27 +430,68 @@ function continuousSync() {
 }
 
 // === Load ===
-async function loadDeck(d,url){
+async function loadDeck(d, url) {
   if (Tone.context.state !== 'running') await Tone.start();
-  const p=players[d],s=deck[d];
-  const stEl=$(d==='A'?'statusA':'statusB');
-  stEl.textContent='⏳ Loading...';
-  if(s.fileUrl)URL.revokeObjectURL(s.fileUrl);
-  s.fileUrl=url;s.offset=0;s.startTime=0;s.loopIn=-1;s.loopOut=-1;s.loopActive=false;
+  const p = players[d], s = deck[d];
+  const stEl = $(d === 'A' ? 'statusA' : 'statusB');
+  stEl.textContent = '⏳ Loading...';
+  if (s.fileUrl && s.fileUrl.startsWith('blob:')) URL.revokeObjectURL(s.fileUrl);
+  s.offset = 0; s.startTime = 0; s.loopIn = -1; s.loopOut = -1; s.loopActive = false;
   updateLoopUI(d);
+
   try {
-    await p.load(url);
-    const result=detectBPM(p.buffer);
-    s.bpm=result.bpm;
-    s.firstBeat=result.firstBeat;
-    s.bars=computeBars(p.buffer,2000);
-    stEl.textContent='🎵 Ready';
-    $(d==='A'?'bpmA':'bpmB').textContent=s.bpm?s.bpm+' BPM':'— BPM';
-    $(d==='A'?'durA':'durB').textContent=fmtTime(getDur(d));
-    if(s.playing){p.stop();p.playbackRate=s.pitch;p.start(undefined,0);s.startTime=Tone.now();s.offset=0;}
-  } catch(e) {
+    let loadUrl = url;
+
+    // For remote URLs (API streams), download as Blob with progress → ObjectURL
+    if (url.startsWith('http') || url.startsWith('/api/')) {
+      stEl.textContent = '⬇️ 0%';
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+
+      const contentLength = response.headers.get('Content-Length');
+      const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+      if (total && response.body) {
+        // Stream with progress
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          const pct = Math.round((received / total) * 100);
+          stEl.textContent = `⬇️ ${pct}%`;
+        }
+
+        const blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'audio/mpeg' });
+        loadUrl = URL.createObjectURL(blob);
+      } else {
+        // Fallback: no Content-Length, download whole blob
+        stEl.textContent = '⬇️ ...';
+        const blob = await response.blob();
+        loadUrl = URL.createObjectURL(blob);
+      }
+      s.fileUrl = loadUrl;
+      stEl.textContent = '⏳ Декодирование...';
+    } else {
+      s.fileUrl = url;
+    }
+
+    await p.load(loadUrl);
+    const result = detectBPM(p.buffer);
+    s.bpm = result.bpm;
+    s.firstBeat = result.firstBeat;
+    s.bars = computeBars(p.buffer, 2000);
+    stEl.textContent = '🎵 Ready';
+    $(d === 'A' ? 'bpmA' : 'bpmB').textContent = s.bpm ? s.bpm + ' BPM' : '— BPM';
+    $(d === 'A' ? 'durA' : 'durB').textContent = fmtTime(getDur(d));
+    if (s.playing) { p.stop(); p.playbackRate = s.pitch; p.start(undefined, 0); s.startTime = Tone.now(); s.offset = 0; }
+  } catch (e) {
     console.error('loadDeck error:', e);
-    stEl.textContent='❌ Ошибка загрузки';
+    stEl.textContent = '❌ Ошибка загрузки';
   }
 }
 
