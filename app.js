@@ -438,7 +438,8 @@ async function loadDeck(d,url){
   if(s.fileUrl)URL.revokeObjectURL(s.fileUrl);
   s.fileUrl=url;s.offset=0;s.startTime=0;s.loopIn=-1;s.loopOut=-1;s.loopActive=false;
   updateLoopUI(d);
-  p.load(url).then(()=>{
+  try {
+    await p.load(url);
     const result=detectBPM(p.buffer);
     s.bpm=result.bpm;
     s.firstBeat=result.firstBeat;
@@ -447,7 +448,10 @@ async function loadDeck(d,url){
     $(d==='A'?'bpmA':'bpmB').textContent=s.bpm?s.bpm+' BPM':'— BPM';
     $(d==='A'?'durA':'durB').textContent=fmtTime(getDur(d));
     if(s.playing){p.stop();p.playbackRate=s.pitch;p.start(undefined,0);s.startTime=Tone.now();s.offset=0;}
-  }).catch(()=>{stEl.textContent='❌ Error';});
+  } catch(e) {
+    console.error('loadDeck error:', e);
+    stEl.textContent='❌ Ошибка загрузки';
+  }
 }
 
 // === Play/Pause ===

@@ -373,29 +373,47 @@ app.get('/api/tracks/:fileId/stream', async (req, res) => {
     const user = validateInitData(initData);
     
     if (!user) {
+        console.log('Stream: unauthorized');
         return res.status(401).send('Unauthorized');
     }
 
     const fileId = req.params.fileId;
+    console.log(`Stream request: fileId=${fileId}, userId=${user.id}`);
     
     db.get(`SELECT * FROM tracks WHERE file_id = ? AND user_id = ?`, [fileId, user.id], async (err, row) => {
         if (err || !row) {
+            console.log('Stream: track not found in DB', err?.message);
             return res.status(404).send('Track not found or access denied');
         }
 
         try {
+            // Get file link from Telegram
             const fileLink = await bot.telegram.getFileLink(fileId);
+            console.log(`Stream: Telegram file link obtained: ${fileLink.href.substring(0, 60)}...`);
+            
+            // Download the full file — Tone.js needs Content-Length for proper decoding
             const response = await fetch(fileLink.href);
             
             if (!response.ok) {
+                console.log(`Stream: Telegram fetch failed with ${response.status}`);
                 return res.status(response.status).send('Failed to fetch from Telegram');
             }
 
-            res.set('Content-Type', row.mime_type || 'audio/mpeg');
-            response.body.pipe(res);
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            
+            console.log(`Stream: sending ${buffer.length} bytes, type=${row.mime_type || 'audio/mpeg'}`);
+            
+            res.set({
+                'Content-Type': row.mime_type || 'audio/mpeg',
+                'Content-Length': buffer.length,
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=3600'
+            });
+            res.send(buffer);
         } catch (error) {
-            console.error('Error fetching file:', error);
-            res.status(500).send('Error streaming track');
+            console.error('Stream error:', error.message);
+            res.status(500).send('Error streaming track: ' + error.message);
         }
     });
 });
