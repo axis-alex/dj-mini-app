@@ -967,41 +967,59 @@ function animate(){
 drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
 animate();
 
-// Fix #1: Persistent AudioContext resumption for iOS
-const resumeAudio = () => {
-  if (Tone.context.state !== 'running') {
+// Fix #1: iOS AudioContext resumption — careful not to steal user gestures from buttons
+let iosAudioUnlocked = false;
+
+const resumeAudioContext = () => {
+  // Only resume if actually suspended — avoid consuming user gestures unnecessarily
+  if (Tone.context.state === 'suspended') {
     Tone.start().catch(() => {});
   }
+};
+
+const unlockIOSAudio = () => {
+  if (iosAudioUnlocked) return;
+  iosAudioUnlocked = true;
+  
+  // Start Tone.js AudioContext
+  Tone.start().catch(() => {});
+  
+  // Kick the silent audio element once to unlock iOS audio playback
   const iosHack = $('iosAudioHack');
-  if (iosHack && iosHack.paused) {
+  if (iosHack) {
     iosHack.play().catch(() => {});
   }
 };
 
-// Resume on EVERY touch/click — not {once:true} — because iOS suspends AudioContext
-document.body.addEventListener('touchstart', resumeAudio);
-document.body.addEventListener('click', resumeAudio);
+// First touch/click unlocks iOS audio (once)
+document.body.addEventListener('touchstart', unlockIOSAudio, { once: true, passive: true });
+document.body.addEventListener('click', unlockIOSAudio, { once: true });
+
+// Lightweight check on subsequent touches — passive so it never blocks buttons
+document.body.addEventListener('touchend', resumeAudioContext, { passive: true });
 
 // Resume when returning from background / other chat
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
-    resumeAudio();
-    // Re-kick the silent audio hack for iOS
-    const iosHack = $('iosAudioHack');
-    if (iosHack) {
-      iosHack.pause();
-      iosHack.currentTime = 0;
-      iosHack.play().catch(() => {});
+    resumeAudioContext();
+    // Re-kick silent audio hack only if it was previously unlocked
+    if (iosAudioUnlocked) {
+      const iosHack = $('iosAudioHack');
+      if (iosHack) {
+        iosHack.pause();
+        iosHack.currentTime = 0;
+        iosHack.play().catch(() => {});
+      }
     }
   }
 });
 
-window.addEventListener('focus', resumeAudio);
+window.addEventListener('focus', resumeAudioContext);
 
-// Periodic iOS audio keep-alive (every 10s)
+// Periodic keep-alive (only resume context, never play() — that needs user gesture)
 setInterval(() => {
-  if (Tone.context.state === 'suspended') {
-    resumeAudio();
+  if (Tone.context.state === 'suspended' && iosAudioUnlocked) {
+    Tone.context.resume().catch(() => {});
   }
 }, 10000);
 
