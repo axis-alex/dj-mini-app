@@ -56,7 +56,7 @@ function computeBars(buffer,numBars){
 function drawWaveform(canvas,d,accent){
   const s=deck[d];
   const bars=s.bars;
-  const dpr=window.devicePixelRatio||1;
+  const dpr=Math.min(window.devicePixelRatio||1, 2); // Fix #11: cap DPR at 2 for perf
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
   const w=cw*dpr,h=ch*dpr;
   if(canvas.width!==w)canvas.width=w;
@@ -451,25 +451,35 @@ async function loadDeck(d, url) {
       const contentLength = response.headers.get('Content-Length');
       const total = contentLength ? parseInt(contentLength, 10) : 0;
 
-      if (total && response.body) {
+      // Fix #3: Check for ReadableStream support (iOS < 16.4 fallback)
+      if (total && response.body && typeof response.body.getReader === 'function') {
         // Stream with progress
-        const reader = response.body.getReader();
-        const chunks = [];
-        let received = 0;
+        try {
+          const reader = response.body.getReader();
+          const chunks = [];
+          let received = 0;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.length;
-          const pct = Math.round((received / total) * 100);
-          stEl.textContent = `⬇️ ${pct}%`;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            const pct = Math.round((received / total) * 100);
+            stEl.textContent = `⬇️ ${pct}%`;
+          }
+
+          const blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'audio/mpeg' });
+          loadUrl = URL.createObjectURL(blob);
+        } catch (streamErr) {
+          // ReadableStream failed — fallback to blob
+          console.warn('Stream read failed, using blob fallback:', streamErr);
+          stEl.textContent = '⬇️ ...';
+          const fallbackResponse = await fetch(url);
+          const blob = await fallbackResponse.blob();
+          loadUrl = URL.createObjectURL(blob);
         }
-
-        const blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'audio/mpeg' });
-        loadUrl = URL.createObjectURL(blob);
       } else {
-        // Fallback: no Content-Length, download whole blob
+        // Fallback: no Content-Length or no ReadableStream support
         stEl.textContent = '⬇️ ...';
         const blob = await response.blob();
         loadUrl = URL.createObjectURL(blob);
@@ -823,6 +833,7 @@ function setupCue(d) {
   btn.addEventListener('mouseup', stopCuePlay);
   btn.addEventListener('mouseleave', stopCuePlay);
   btn.addEventListener('touchend', stopCuePlay);
+  btn.addEventListener('touchcancel', stopCuePlay); // Fix #7: iOS touchcancel fallback
 }
 setupCue('A'); setupCue('B');
 
@@ -836,7 +847,11 @@ function addReset(id, defaultVal, onReset) {
   let lastTap = 0;
   el.addEventListener('touchend', (e) => {
     const now = Date.now();
-    if (now - lastTap < 300) { e.preventDefault(); el.value = defaultVal; onReset(defaultVal); }
+    if (now - lastTap < 300) {
+      e.preventDefault();
+      e.stopPropagation(); // Fix #8: prevent iOS interpreting as zoom
+      el.value = defaultVal; onReset(defaultVal);
+    }
     lastTap = now;
   });
 }
@@ -872,16 +887,56 @@ document.querySelectorAll('.fx-btn').forEach(btn=>{
   });
 });
 
-// === Recording ===
-$('recordBtn')?.addEventListener('click',()=>{
-  const btn=$('recordBtn'),st=$('recStatus');
-  if(!isRecording){
-    audioChunks=[];mediaRecorder=new MediaRecorder(dest.stream);
-    mediaRecorder.ondataavailable=e=>audioChunks.push(e.data);
-    mediaRecorder.onstop=()=>{const b=new Blob(audioChunks,{type:'audio/webm'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`katz_mix_${Date.now()}.webm`;a.click();st.textContent='✅ Сохранено!';setTimeout(()=>st.textContent='',3000);};
-    mediaRecorder.start();isRecording=true;btn.textContent='⏹ Стоп';btn.classList.add('recording');st.textContent='🔴 Запись...';
-  }else{mediaRecorder.stop();isRecording=false;btn.textContent='⏺ Запись';btn.classList.remove('recording');}
-});
+// === Recording (Fix #2: iOS MediaRecorder detection) ===
+if (typeof MediaRecorder === 'undefined') {
+  // iOS Safari < 17.4 — hide record button
+  const recBtn = $('recordBtn');
+  if (recBtn) {
+    recBtn.textContent = '🚫 Запись';
+    recBtn.disabled = true;
+    recBtn.style.opacity = '0.4';
+    recBtn.title = 'Запись не поддерживается на этом устройстве';
+  }
+} else {
+  // Determine best supported MIME type
+  const recMime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+    : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4'
+    : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg' : '';
+  const recExt = recMime.includes('mp4') ? 'm4a' : recMime.includes('ogg') ? 'ogg' : 'webm';
+
+  $('recordBtn')?.addEventListener('click', () => {
+    const btn = $('recordBtn'), st = $('recStatus');
+    if (!isRecording) {
+      audioChunks = [];
+      const opts = recMime ? { mimeType: recMime } : {};
+      try {
+        mediaRecorder = new MediaRecorder(dest.stream, opts);
+      } catch (e) {
+        mediaRecorder = new MediaRecorder(dest.stream);
+      }
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.onstop = () => {
+        const b = new Blob(audioChunks, { type: recMime || 'audio/webm' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = `katz_mix_${Date.now()}.${recExt}`;
+        a.click();
+        st.textContent = '✅ Сохранено!';
+        setTimeout(() => st.textContent = '', 3000);
+      };
+      mediaRecorder.start();
+      isRecording = true;
+      btn.textContent = '⏹ Стоп';
+      btn.classList.add('recording');
+      st.textContent = '🔴 Запись...';
+    } else {
+      mediaRecorder.stop();
+      isRecording = false;
+      btn.textContent = '⏺ Запись';
+      btn.classList.remove('recording');
+    }
+  });
+}
 
 // === Animation ===
 function animate(){
@@ -912,13 +967,42 @@ function animate(){
 drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
 animate();
 
-const startAudio=()=>{
-  if(Tone.context.state!=='running')Tone.start();
+// Fix #1: Persistent AudioContext resumption for iOS
+const resumeAudio = () => {
+  if (Tone.context.state !== 'running') {
+    Tone.start().catch(() => {});
+  }
   const iosHack = $('iosAudioHack');
   if (iosHack && iosHack.paused) {
-    iosHack.play().catch(e => console.log('Audio hack play prevented', e));
+    iosHack.play().catch(() => {});
   }
 };
-document.body.addEventListener('touchstart',startAudio,{once:true});
-document.body.addEventListener('click',startAudio,{once:true});
+
+// Resume on EVERY touch/click — not {once:true} — because iOS suspends AudioContext
+document.body.addEventListener('touchstart', resumeAudio);
+document.body.addEventListener('click', resumeAudio);
+
+// Resume when returning from background / other chat
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    resumeAudio();
+    // Re-kick the silent audio hack for iOS
+    const iosHack = $('iosAudioHack');
+    if (iosHack) {
+      iosHack.pause();
+      iosHack.currentTime = 0;
+      iosHack.play().catch(() => {});
+    }
+  }
+});
+
+window.addEventListener('focus', resumeAudio);
+
+// Periodic iOS audio keep-alive (every 10s)
+setInterval(() => {
+  if (Tone.context.state === 'suspended') {
+    resumeAudio();
+  }
+}, 10000);
+
 })();
