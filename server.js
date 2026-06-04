@@ -425,6 +425,7 @@ app.get('/', (req, res) => {
     res.type('html').send(html);
 });
 app.get('/app.js', (req, res) => res.sendFile(path.join(__dirname, 'app.js')));
+app.get('/tone.min.js', (req, res) => res.sendFile(path.join(__dirname, 'tone.min.js')));
 app.get('/styles.css', (req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
 
 // Static assets (images etc.) but block sensitive files
