@@ -27,7 +27,6 @@
 /* Fix #6: Prevent iOS rubber-banding */
 html, body {
   overscroll-behavior: none;
-  -webkit-overflow-scrolling: touch;
 }
 
 body {
@@ -172,6 +171,8 @@ body {
   background: rgba(40,40,70,0.8);
   transition: all 0.15s ease;
   display: flex; align-items: center; gap: 4px;
+  touch-action: manipulation; /* iOS: enable immediate click synthesis */
+  -webkit-user-select: none;
 }
 .btn:active { transform: scale(0.94); }
 .btn-play { background: linear-gradient(135deg, #1a3a5c, #2a5a8c); }
@@ -218,6 +219,7 @@ body {
   color: var(--text-secondary); font-family: 'Inter', sans-serif;
   font-size: 0.6rem; font-weight: 600; padding: 4px 10px;
   border-radius: 20px; cursor: pointer; transition: all 0.2s;
+  touch-action: manipulation; /* iOS: enable immediate click synthesis */
 }
 .fx-btn.active {
   background: rgba(0,229,255,0.2); color: var(--accent-cyan);
@@ -237,6 +239,7 @@ body {
   color: var(--text-secondary); font-family: 'Inter', sans-serif;
   font-size: 0.65rem; font-weight: 700; padding: 5px 12px;
   border-radius: 8px; cursor: pointer; transition: all 0.15s;
+  touch-action: manipulation; /* iOS */
 }
 .loop-btn:active { transform: scale(0.94); }
 .loop-btn.set {
@@ -314,6 +317,7 @@ body {
   font-weight: 700; font-size: 0.7rem; cursor: pointer;
   background: linear-gradient(135deg, #1a4a2e, #2a8a5a);
   color: #fff; transition: all 0.15s; min-width: 0;
+  touch-action: manipulation; /* iOS */
 }
 .btn-sync:active { transform: scale(0.96); }
 .btn-sync-a { background: linear-gradient(135deg, #0a3a4a, #1a6a8a); }
@@ -341,6 +345,7 @@ body {
   font-weight: 700; font-size: 0.8rem; cursor: pointer;
   background: linear-gradient(135deg, #4a1a1a, #8a2a2a);
   color: #fff; transition: all 0.15s;
+  touch-action: manipulation; /* iOS */
 }
 .btn-record:active { transform: scale(0.96); }
 .btn-record.recording { animation: pulse-rec 1s infinite; }

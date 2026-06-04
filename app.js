@@ -967,6 +967,42 @@ function animate(){
 drawWaveform($('waveA'),'A','#00e5ff');drawWaveform($('waveB'),'B','#ff00e5');
 animate();
 
+// === iOS touch→click polyfill ===
+// On iOS WKWebView, button click events may not fire from touch.
+// This polyfill manually triggers .click() on touchend for button elements.
+{
+  let touchStartTarget = null;
+  let touchMoved = false;
+
+  document.addEventListener('touchstart', (e) => {
+    touchStartTarget = e.target;
+    touchMoved = false;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', () => {
+    touchMoved = true;
+  }, { passive: true });
+
+  document.addEventListener('touchend', (e) => {
+    if (touchMoved || !touchStartTarget) return;
+    
+    // Find the nearest clickable element
+    const btn = e.target.closest('button, .btn, .fx-btn, .btn-sync, .track-item, .sync-btn, .sync-btn-small, .loop-btn');
+    if (!btn) return;
+    
+    // Only fire if touchend target matches touchstart target's button
+    const startBtn = touchStartTarget.closest('button, .btn, .fx-btn, .btn-sync, .track-item, .sync-btn, .sync-btn-small, .loop-btn');
+    if (btn !== startBtn) return;
+    
+    // Skip CUE buttons (they have their own touchstart/touchend hold logic)
+    if (btn.classList.contains('btn-cue')) return;
+
+    // Prevent the native (potentially delayed/missing) click and fire manually
+    e.preventDefault();
+    btn.click();
+  }, { passive: false });
+}
+
 // Fix #1: iOS AudioContext resumption — careful not to steal user gestures from buttons
 let iosAudioUnlocked = false;
 
