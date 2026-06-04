@@ -1,5 +1,15 @@
 (function(){
 'use strict';
+
+// Global error handler — shows JS errors on screen for debugging
+window.onerror = function(msg, src, line, col, err) {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#ff1744;color:#fff;padding:8px 12px;font:12px/1.4 monospace;word-break:break-all;';
+  d.textContent = `JS Error: ${msg} (${src?.split('/').pop()}:${line})`;
+  document.body?.prepend(d);
+  setTimeout(() => d.remove(), 15000);
+};
+
 const TG=window.Telegram?.WebApp; if(TG) TG.ready();
 const playerA=new Tone.Player(),playerB=new Tone.Player();
 const eqA=new Tone.EQ3(0,0,0),eqB=new Tone.EQ3(0,0,0);
@@ -9,8 +19,16 @@ const fxA={delay:new Tone.FeedbackDelay('8n',0.4).set({wet:0}),reverb:new Tone.R
 const fxB={delay:new Tone.FeedbackDelay('8n',0.4).set({wet:0}),reverb:new Tone.Reverb(1.5).set({wet:0}),phaser:new Tone.Phaser({frequency:2,octaves:3,baseFrequency:1000}).set({wet:0})};
 playerA.chain(eqA,fxA.delay,fxA.reverb,fxA.phaser,gainA,crossFade.a);
 playerB.chain(eqB,fxB.delay,fxB.reverb,fxB.phaser,gainB,crossFade.b);
-const dest=Tone.context.createMediaStreamDestination();
-crossFade.chain(masterGain,Tone.Destination); masterGain.connect(dest);
+
+// createMediaStreamDestination may not exist in iOS WKWebView (Telegram)
+let dest = null;
+try {
+  dest = Tone.context.createMediaStreamDestination();
+  masterGain.connect(dest);
+} catch(e) {
+  console.warn('createMediaStreamDestination not available:', e.message);
+}
+crossFade.chain(masterGain,Tone.Destination);
 
 const deck={
   A:{playing:false,fileUrl:null,startTime:0,offset:0,bpm:0,firstBeat:0,pitch:1,loopIn:-1,loopOut:-1,loopActive:false,bars:null},
@@ -888,54 +906,66 @@ document.querySelectorAll('.fx-btn').forEach(btn=>{
 });
 
 // === Recording (Fix #2: iOS MediaRecorder detection) ===
-if (typeof MediaRecorder === 'undefined') {
-  // iOS Safari < 17.4 — hide record button
-  const recBtn = $('recordBtn');
-  if (recBtn) {
-    recBtn.textContent = '🚫 Запись';
-    recBtn.disabled = true;
-    recBtn.style.opacity = '0.4';
-    recBtn.title = 'Запись не поддерживается на этом устройстве';
-  }
-} else {
-  // Determine best supported MIME type
-  const recMime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
-    : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4'
-    : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg' : '';
-  const recExt = recMime.includes('mp4') ? 'm4a' : recMime.includes('ogg') ? 'ogg' : 'webm';
-
-  $('recordBtn')?.addEventListener('click', () => {
-    const btn = $('recordBtn'), st = $('recStatus');
-    if (!isRecording) {
-      audioChunks = [];
-      const opts = recMime ? { mimeType: recMime } : {};
-      try {
-        mediaRecorder = new MediaRecorder(dest.stream, opts);
-      } catch (e) {
-        mediaRecorder = new MediaRecorder(dest.stream);
-      }
-      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-      mediaRecorder.onstop = () => {
-        const b = new Blob(audioChunks, { type: recMime || 'audio/webm' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = `katz_mix_${Date.now()}.${recExt}`;
-        a.click();
-        st.textContent = '✅ Сохранено!';
-        setTimeout(() => st.textContent = '', 3000);
-      };
-      mediaRecorder.start();
-      isRecording = true;
-      btn.textContent = '⏹ Стоп';
-      btn.classList.add('recording');
-      st.textContent = '🔴 Запись...';
-    } else {
-      mediaRecorder.stop();
-      isRecording = false;
-      btn.textContent = '⏺ Запись';
-      btn.classList.remove('recording');
+try {
+  if (typeof MediaRecorder === 'undefined' || !dest) {
+    // MediaRecorder or dest not available — disable record button
+    const recBtn = $('recordBtn');
+    if (recBtn) {
+      recBtn.textContent = '🚫 Запись';
+      recBtn.disabled = true;
+      recBtn.style.opacity = '0.4';
     }
-  });
+  } else {
+    // Determine best supported MIME type (wrapped in try/catch for safety)
+    let recMime = '';
+    let recExt = 'webm';
+    try {
+      recMime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4'
+        : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg' : '';
+      recExt = recMime.includes('mp4') ? 'm4a' : recMime.includes('ogg') ? 'ogg' : 'webm';
+    } catch(e) {
+      console.warn('isTypeSupported failed:', e.message);
+    }
+
+    $('recordBtn')?.addEventListener('click', () => {
+      const btn = $('recordBtn'), st = $('recStatus');
+      if (!isRecording) {
+        audioChunks = [];
+        const opts = recMime ? { mimeType: recMime } : {};
+        try {
+          mediaRecorder = new MediaRecorder(dest.stream, opts);
+        } catch (e) {
+          try { mediaRecorder = new MediaRecorder(dest.stream); } catch(e2) {
+            st.textContent = '❌ Запись недоступна';
+            return;
+          }
+        }
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          const b = new Blob(audioChunks, { type: recMime || 'audio/webm' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(b);
+          a.download = `katz_mix_${Date.now()}.${recExt}`;
+          a.click();
+          st.textContent = '✅ Сохранено!';
+          setTimeout(() => st.textContent = '', 3000);
+        };
+        mediaRecorder.start();
+        isRecording = true;
+        btn.textContent = '⏹ Стоп';
+        btn.classList.add('recording');
+        st.textContent = '🔴 Запись...';
+      } else {
+        mediaRecorder.stop();
+        isRecording = false;
+        btn.textContent = '⏺ Запись';
+        btn.classList.remove('recording');
+      }
+    });
+  }
+} catch(recErr) {
+  console.warn('Recording setup failed:', recErr.message);
 }
 
 // === Animation ===
